@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Laboratório para comparar memória em exportações Excel com NPOI, EF Core e MiniExcel.">
+    <title>Excel Memory Lab</title>
+    <link rel="stylesheet" href="/site.css?v=4">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero">
+            <div>
+                <p class="eyebrow"><span class="status-dot"></span> Excel Memory Lab</p>
+                <h1>Quanto custa gerar<br>esse Excel?</h1>
+                <p class="hero-copy">
+                    Compare o custo do workbook e o custo da consulta em um ambiente
+                    controlado. Descubra onde a memória realmente fica.
+                </p>
+                <nav class="lab-nav" aria-label="Eixos do laboratório">
+                    <a href="#npoi-benchmark">NPOI / workbook</a>
+                    <a href="#query-benchmark">EF Core + MiniExcel</a>
+                </nav>
+            </div>
+
+            <div class="hero-badge" aria-label="Tecnologias utilizadas">
+                <span>.NET 10</span>
+                <span>NPOI 2.7.6</span>
+                <span>MiniExcel 1.46</span>
+                <span>Amostragem 10 ms</span>
+            </div>
+        </header>
+
+        <main>
+            <section id="npoi-benchmark" class="control-panel" aria-labelledby="config-title">
+                <div class="section-heading">
+                    <div>
+                        <p class="section-index">01 / CONFIGURAR</p>
+                        <h2 id="config-title">Nova medição</h2>
+                    </div>
+                    <p id="scenario-description" class="scenario-description">
+                        Reproduz o fluxo atual com lista, XSSFWorkbook e cópia por ToArray().
+                    </p>
+                </div>
+
+                <form id="measurement-form">
+                    <div class="field-grid">
+                        <label class="field">
+                            <span>Cenário</span>
+                            <select id="scenario" name="scenario">
+                                <option value="atual">Atual</option>
+                                <option value="xssf-sem-to-array">XSSF sem ToArray</option>
+                                <option value="sxssf-com-lista">SXSSF com lista</option>
+                                <option value="sxssf-stream-arquivo">SXSSF + arquivo temporário</option>
+                                <option value="sxssf-stream-response">SXSSF + response</option>
+                            </select>
+                        </label>
+
+                        <label class="field">
+                            <span>Quantidade de registros</span>
+                            <input id="quantity" name="quantity" type="number" min="1" max="1048575" value="25000" required>
+                        </label>
+                    </div>
+
+                    <div class="presets" aria-label="Quantidades sugeridas">
+                        <span>Atalhos</span>
+                        <button type="button" data-quantity="10000">10 mil</button>
+                        <button type="button" data-quantity="25000" class="active">25 mil</button>
+                        <button type="button" data-quantity="50000">50 mil</button>
+                        <button type="button" data-quantity="100000">100 mil</button>
+                    </div>
+
+                    <div class="form-footer">
+                        <div class="toggle-group">
+                            <label class="toggle">
+                                <input id="warmup" type="checkbox" checked>
+                                <span class="toggle-control"></span>
+                                <span>Aquecer cenário</span>
+                            </label>
+                            <label class="toggle">
+                                <input id="force-gc" type="checkbox" checked>
+                                <span class="toggle-control"></span>
+                                <span>Forçar GC antes</span>
+                            </label>
+                        </div>
+
+                        <div class="action-group">
+                            <button id="download-button" class="button secondary" type="button">
+                                Baixar Excel
+                            </button>
+                            <button id="measure-button" class="button primary" type="submit">
+                                <span class="button-label">Executar medição</span>
+                                <span class="spinner" aria-hidden="true"></span>
+                            </button>
+                        </div>
+                    </div>
+                </form>
+
+                <p id="request-status" class="request-status" role="status" aria-live="polite"></p>
+
+                <div class="scenario-guide" aria-labelledby="scenario-guide-title">
+                    <div class="scenario-guide-heading">
+                        <div>
+                            <span class="guide-kicker">Guia dos cenários</span>
+                            <h3 id="scenario-guide-title">O que muda em cada teste?</h3>
+                        </div>
+                        <p>Clique em um cartão para selecionar o cenário no formulário.</p>
+                    </div>
+                    <div id="scenario-cards" class="scenario-cards"></div>
+                </div>
+            </section>
+
+            <section id="results" class="results hidden" aria-labelledby="results-title">
+                <div class="section-heading results-heading">
+                    <div>
+                        <p class="section-index">02 / RESULTADO</p>
+                        <h2 id="results-title">Leitura da execução</h2>
+                    </div>
+                    <span id="result-scenario" class="result-tag"></span>
+                </div>
+
+                <div class="metrics-grid">
+                    <article class="metric-card metric-card-main">
+                        <span class="metric-label">Pico de memória gerenciada</span>
+                        <strong id="managed-peak">0 MiB</strong>
+                        <div class="metric-track"><span id="managed-track"></span></div>
+                        <small>Delta entre o início e o maior valor observado.</small>
+                    </article>
+
+                    <article class="metric-card">
+                        <span class="metric-label">Working set</span>
+                        <strong id="working-set">0 MiB</strong>
+                        <small>Memória física associada ao processo.</small>
+                    </article>
+
+                    <article class="metric-card">
+                        <span class="metric-label">Memória privada</span>
+                        <strong id="private-memory">0 MiB</strong>
+                        <small>Memória exclusiva reservada pelo processo.</small>
+                    </article>
+
+                    <article class="metric-card">
+                        <span class="metric-label">Total alocado</span>
+                        <strong id="allocated-memory">0 MiB</strong>
+                        <small>Inclui objetos coletados durante a execução.</small>
+                    </article>
+
+                    <article class="metric-card">
+                        <span class="metric-label">Duração</span>
+                        <strong id="duration">0 ms</strong>
+                        <small id="sample-count">0 amostras coletadas.</small>
+                    </article>
+                </div>
+
+                <div class="execution-strip">
+                    <div>
+                        <span>Arquivo final</span>
+                        <strong id="file-size">0 MiB</strong>
+                    </div>
+                    <div>
+                        <span>Destino medido</span>
+                        <strong id="measurement-target">—</strong>
+                    </div>
+                    <div>
+                        <span>Coletas do GC</span>
+                        <strong id="gc-counts">G0 0 · G1 0 · G2 0</strong>
+                    </div>
+                </div>
+            </section>
+
+            <section class="history-panel" aria-labelledby="history-title">
+                <div class="section-heading">
+                    <div>
+                        <p class="section-index">03 / COMPARAR</p>
+                        <h2 id="history-title">Medições desta sessão</h2>
+                    </div>
+                    <p class="scenario-description">Os resultados mais recentes aparecem primeiro.</p>
+                </div>
+
+                <div id="empty-history" class="empty-state">
+                    <span>SEM DADOS</span>
+                    <p>Execute a primeira medição para iniciar a comparação.</p>
+                </div>
+
+                <div id="history-content" class="history-content hidden">
+                    <div id="history-bars" class="history-bars" aria-label="Comparação visual do pico de memória"></div>
+
+                    <div class="table-scroll">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Cenário</th>
+                                    <th>Registros</th>
+                                    <th>Pico gerenciado</th>
+                                    <th>Working set</th>
+                                    <th>Duração</th>
+                                </tr>
+                            </thead>
+                            <tbody id="history-table"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <section id="query-benchmark" class="query-panel" aria-labelledby="query-title">
+                <div class="section-heading query-heading">
+                    <div>
+                        <p class="section-index">04 / EF CORE + MINIEXCEL</p>
+                        <h2 id="query-title">Consulta grande, memória pequena</h2>
+                    </div>
+                    <p id="query-scenario-description" class="scenario-description">
+                        Compare materialização, streaming e DbDataReader com o mesmo Excel.
+                    </p>
+                </div>
+
+                <div class="query-explainer">
+                    <article>
+                        <span class="guide-kicker">Pergunta do teste</span>
+                        <h3>Onde processar o enum e os cálculos?</h3>
+                        <p>
+                            Os cinco fluxos exportam as mesmas oito colunas. Só mudam a
+                            fronteira SQL/C# e a forma de entregar cada linha ao MiniExcel.
+                        </p>
+                    </article>
+                    <article class="diagnostic-card">
+                        <div class="diagnostic-title">
+                            <span class="guide-kicker">Diagnóstico real do EF Core</span>
+                            <span id="translation-badge" class="diagnostic-badge loading">verificando</span>
+                        </div>
+                        <p id="translation-message">
+                            Testando um método C# customizado dentro de Where…
+                        </p>
+                    </article>
+                </div>
+
+                <form id="query-measurement-form" class="query-form">
+                    <div class="field-grid">
+                        <label class="field">
+                            <span>Cenário da consulta</span>
+                            <select id="query-scenario" name="query-scenario">
+                                <option value="streaming-cliente">Streaming cliente</option>
+                            </select>
+                        </label>
+
+                        <label class="field">
+                            <span>Quantidade de registros</span>
+                            <input id="query-quantity" name="query-quantity" type="number" min="1" max="1048575" value="50000" required>
+                        </label>
+                    </div>
+
+                    <div class="presets query-presets" aria-label="Quantidades sugeridas para consulta">
+                        <span>Atalhos</span>
+                        <button type="button" data-query-quantity="10000">10 mil</button>
+                        <button type="button" data-query-quantity="50000" class="active">50 mil</button>
+                        <button type="button" data-query-quantity="100000">100 mil</button>
+                        <button type="button" data-query-quantity="250000">250 mil</button>
+                    </div>
+
+                    <div class="form-footer">
+                        <div class="toggle-group">
+                            <label class="toggle">
+                                <input id="query-warmup" type="checkbox" checked>
+                                <span class="toggle-control"></span>
+                                <span>Aquecer cenário</span>
+                            </label>
+                            <label class="toggle">
+                                <input id="query-force-gc" type="checkbox" checked>
+                                <span class="toggle-control"></span>
+                                <span>Forçar GC antes</span>
+                            </label>
+                        </div>
+
+                        <button id="query-measure-button" class="button primary" type="submit">
+                            <span class="button-label">Medir consulta + Excel</span>
+                            <span class="spinner" aria-hidden="true"></span>
+                        </button>
+                    </div>
+                </form>
+
+                <p id="query-request-status" class="request-status" role="status" aria-live="polite"></p>
+
+                <div class="scenario-guide query-scenario-guide" aria-labelledby="query-guide-title">
+                    <div class="scenario-guide-heading">
+                        <div>
+                            <span class="guide-kicker">Cinco pipelines comparáveis</span>
+                            <h3 id="query-guide-title">O que muda em cada cenário?</h3>
+                        </div>
+                        <p>Selecione um cartão e execute. O banco é preparado fora do trecho medido.</p>
+                    </div>
+                    <div id="query-scenario-cards" class="scenario-cards query-scenario-cards"></div>
+                </div>
+
+                <div id="query-results" class="query-results hidden" aria-live="polite">
+                    <div class="query-result-header">
+                        <div>
+                            <span class="guide-kicker">Resultado da execução</span>
+                            <h3 id="query-result-title">—</h3>
+                        </div>
+                        <div id="query-result-flags" class="result-flags"></div>
+                    </div>
+
+                    <div class="query-metrics-grid">
+                        <article>
+                            <span>Pico gerenciado</span>
+                            <strong id="query-managed-peak">0 MiB</strong>
+                        </article>
+                        <article>
+                            <span>Working set</span>
+                            <strong id="query-working-set">0 MiB</strong>
+                        </article>
+                        <article>
+                            <span>Duração</span>
+                            <strong id="query-duration">0 ms</strong>
+                        </article>
+                        <article>
+                            <span>Total alocado</span>
+                            <strong id="query-allocated">0 MiB</strong>
+                        </article>
+                        <article>
+                            <span>Arquivo</span>
+                            <strong id="query-file-size">0 MiB</strong>
+                        </article>
+                    </div>
+
+                    <details class="sql-panel">
+                        <summary>Ver SQL executado</summary>
+                        <pre id="query-sql"></pre>
+                    </details>
+                </div>
+
+                <div id="query-history" class="query-history">
+                    <div class="scenario-guide-heading">
+                        <div>
+                            <span class="guide-kicker">Comparação desta sessão</span>
+                            <h3>Pico de memória por cenário</h3>
+                        </div>
+                        <p>Quanto menor a barra, menor foi o pico gerenciado observado.</p>
+                    </div>
+                    <div id="query-empty-history" class="empty-state query-empty-state">
+                        <span>SEM MEDIÇÕES</span>
+                        <p>Os resultados aparecerão aqui e serão mantidos nesta aba.</p>
+                    </div>
+                    <div id="query-history-content" class="hidden">
+                        <div id="query-history-bars" class="history-bars"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Os resultados medem consulta e geração do arquivo. A transferência pela rede não entra no tempo apresentado.</p>
+            <span>OUT OF MEMORY WORKBOOK / LAB</span>
+        </footer>
+    </div>
+
+    <script src="/app.js?v=4" defer></script>
+</body>
+</html>

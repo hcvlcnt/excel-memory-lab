@@ -1,0 +1,45 @@
+# Build do .NET
+bin/
+obj/
+artifacts/
+
+# Visual Studio, Rider e VS Code
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Resultados de testes e cobertura
+TestResults/
+coverage/
+coverage.*
+*.coverage
+*.coveragexml
+
+# Dados e resultados gerados pelos benchmarks
+Resultados/
+work/
+*.db
+*.db-shm
+*.db-wal
+
+# Configurações locais e segredos
+.env
+.env.*
+!.env.example
+appsettings.Local.json
+
+# Logs e temporários
+*.log
+*.tmp
+*.temp
+*.bak
+*.cache
+
+# Arquivos do sistema operacional
+.DS_Store
+Thumbs.db
+Desktop.ini
