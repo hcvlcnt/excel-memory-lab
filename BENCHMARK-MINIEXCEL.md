@@ -112,3 +112,8 @@ Referências: [avaliação cliente e servidor no EF Core](https://learn.microsof
 [conversões de valores no EF Core](https://learn.microsoft.com/ef/core/modeling/value-conversions),
 [consultas eficientes e streaming](https://learn.microsoft.com/ef/core/performance/efficient-querying) e
 [documentação oficial do MiniExcel](https://github.com/mini-software/MiniExcel/blob/master/README.md).
+
+## Transparência
+
+O frontend deste laboratório foi gerado via inteligência artificial (IA) e
+revisado por meio de compilação, validação dos endpoints e testes de interação.
