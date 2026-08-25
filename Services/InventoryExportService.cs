@@ -5,28 +5,28 @@ using OutOfMemoryWorkbook.Models;
 
 namespace OutOfMemoryWorkbook.Services;
 
-public sealed class EstoqueExportService(IEstoqueDataSource dataSource) : IEstoqueExportService
+public sealed class InventoryExportService(IInventoryDataSource dataSource) : IInventoryExportService
 {
     private const int RowAccessWindowSize = 200;
     private const bool CompressTemporaryFiles = true;
     private const bool UseSharedStringsTable = false;
 
-    public byte[] ExportarCenarioAtual(
-        int quantidade,
+    public byte[] ExportCurrentScenario(
+        int quantity,
         CancellationToken cancellationToken)
     {
-        var estoques = dataSource.CriarLista(quantidade, cancellationToken);
+        var inventoryItems = dataSource.CreateList(quantity, cancellationToken);
         var workbook = new XSSFWorkbook();
 
         try
         {
-            PreencherWorkbook(workbook, estoques, cancellationToken);
+            PopulateWorkbook(workbook, inventoryItems, cancellationToken);
 
             using var memoryStream = new MemoryStream();
             workbook.Write(memoryStream, leaveOpen: true);
 
-            // Reproduz intencionalmente o cenário atual: o ToArray cria uma
-            // segunda cópia do arquivo na memória.
+            // Intentionally reproduces the current scenario: ToArray creates a
+            // second copy of the file in memory.
             return memoryStream.ToArray();
         }
         finally
@@ -35,17 +35,17 @@ public sealed class EstoqueExportService(IEstoqueDataSource dataSource) : IEstoq
         }
     }
 
-    public Stream ExportarXssfSemToArray(
-        int quantidade,
+    public Stream ExportXssfWithoutToArray(
+        int quantity,
         CancellationToken cancellationToken)
     {
-        var estoques = dataSource.CriarLista(quantidade, cancellationToken);
+        var inventoryItems = dataSource.CreateList(quantity, cancellationToken);
         var workbook = new XSSFWorkbook();
         var memoryStream = new MemoryStream();
 
         try
         {
-            PreencherWorkbook(workbook, estoques, cancellationToken);
+            PopulateWorkbook(workbook, inventoryItems, cancellationToken);
             workbook.Write(memoryStream, leaveOpen: true);
             memoryStream.Position = 0;
 
@@ -62,16 +62,16 @@ public sealed class EstoqueExportService(IEstoqueDataSource dataSource) : IEstoq
         }
     }
 
-    public byte[] ExportarSxssfComLista(
-        int quantidade,
+    public byte[] ExportSxssfWithList(
+        int quantity,
         CancellationToken cancellationToken)
     {
-        var estoques = dataSource.CriarLista(quantidade, cancellationToken);
-        var workbook = CriarSxssfWorkbook();
+        var inventoryItems = dataSource.CreateList(quantity, cancellationToken);
+        var workbook = CreateSxssfWorkbook();
 
         try
         {
-            PreencherWorkbook(workbook, estoques, cancellationToken);
+            PopulateWorkbook(workbook, inventoryItems, cancellationToken);
 
             using var memoryStream = new MemoryStream();
             workbook.Write(memoryStream, leaveOpen: true);
@@ -83,46 +83,46 @@ public sealed class EstoqueExportService(IEstoqueDataSource dataSource) : IEstoq
         }
     }
 
-    public string ExportarSxssfParaArquivoTemporario(
-        int quantidade,
+    public string ExportSxssfToTemporaryFile(
+        int quantity,
         CancellationToken cancellationToken)
     {
-        var caminho = Path.Combine(
+        var path = Path.Combine(
             Path.GetTempPath(),
             $"estoque-{Guid.NewGuid():N}.xlsx");
 
         try
         {
-            using var arquivo = new FileStream(
-                caminho,
+            using var file = new FileStream(
+                path,
                 FileMode.CreateNew,
                 FileAccess.Write,
                 FileShare.None,
                 bufferSize: 64 * 1024,
                 options: FileOptions.SequentialScan);
 
-            ExportarSxssfParaStream(quantidade, arquivo, cancellationToken);
-            return caminho;
+            ExportSxssfToStream(quantity, file, cancellationToken);
+            return path;
         }
         catch
         {
-            File.Delete(caminho);
+            File.Delete(path);
             throw;
         }
     }
 
-    public void ExportarSxssfParaStream(
-        int quantidade,
-        Stream destino,
+    public void ExportSxssfToStream(
+        int quantity,
+        Stream target,
         CancellationToken cancellationToken)
     {
-        var workbook = CriarSxssfWorkbook();
+        var workbook = CreateSxssfWorkbook();
 
         try
         {
-            var estoques = dataSource.Stream(quantidade, cancellationToken);
-            PreencherWorkbook(workbook, estoques, cancellationToken);
-            workbook.Write(destino, leaveOpen: true);
+            var inventoryItems = dataSource.Stream(quantity, cancellationToken);
+            PopulateWorkbook(workbook, inventoryItems, cancellationToken);
+            workbook.Write(target, leaveOpen: true);
         }
         finally
         {
@@ -130,7 +130,7 @@ public sealed class EstoqueExportService(IEstoqueDataSource dataSource) : IEstoq
         }
     }
 
-    private static SXSSFWorkbook CriarSxssfWorkbook()
+    private static SXSSFWorkbook CreateSxssfWorkbook()
     {
         return new SXSSFWorkbook(
             workbook: null!,
@@ -139,20 +139,20 @@ public sealed class EstoqueExportService(IEstoqueDataSource dataSource) : IEstoq
             useSharedStringsTable: UseSharedStringsTable);
     }
 
-    private static void PreencherWorkbook(
+    private static void PopulateWorkbook(
         IWorkbook workbook,
-        IEnumerable<Estoque> estoques,
+        IEnumerable<InventoryItem> inventoryItems,
         CancellationToken cancellationToken)
     {
         var sheet = workbook.CreateSheet("Estoque");
-        ConfigurarColunas(sheet);
+        ConfigureColumns(sheet);
 
-        var styles = CriarEstilos(workbook);
-        CriarCabecalho(sheet, styles.Cabecalho);
+        var styles = CreateStyles(workbook);
+        CreateHeader(sheet, styles.Header);
 
         var rowIndex = 1;
 
-        foreach (var estoque in estoques)
+        foreach (var inventoryItem in inventoryItems)
         {
             if ((rowIndex & 1023) == 0)
             {
@@ -161,26 +161,26 @@ public sealed class EstoqueExportService(IEstoqueDataSource dataSource) : IEstoq
 
             var row = sheet.CreateRow(rowIndex++);
 
-            row.CreateCell(0).SetCellValue((double)estoque.Id);
-            row.CreateCell(1).SetCellValue(estoque.Codigo);
-            row.CreateCell(2).SetCellValue(estoque.Descricao);
-            row.CreateCell(3).SetCellValue(estoque.Categoria);
-            row.CreateCell(4).SetCellValue(estoque.Deposito);
-            row.CreateCell(5).SetCellValue(estoque.Quantidade);
+            row.CreateCell(0).SetCellValue((double)inventoryItem.Id);
+            row.CreateCell(1).SetCellValue(inventoryItem.Code);
+            row.CreateCell(2).SetCellValue(inventoryItem.Description);
+            row.CreateCell(3).SetCellValue(inventoryItem.Category);
+            row.CreateCell(4).SetCellValue(inventoryItem.Warehouse);
+            row.CreateCell(5).SetCellValue(inventoryItem.Quantity);
 
-            var custoCell = row.CreateCell(6);
-            custoCell.SetCellValue((double)estoque.CustoUnitario);
-            custoCell.CellStyle = styles.Monetario;
+            var costCell = row.CreateCell(6);
+            costCell.SetCellValue((double)inventoryItem.UnitCost);
+            costCell.CellStyle = styles.Currency;
 
-            var dataCell = row.CreateCell(7);
-            dataCell.SetCellValue(estoque.UltimaMovimentacao);
-            dataCell.CellStyle = styles.DataHora;
+            var dateCell = row.CreateCell(7);
+            dateCell.SetCellValue(inventoryItem.LastMovement);
+            dateCell.CellStyle = styles.DateTime;
         }
     }
 
-    private static void CriarCabecalho(ISheet sheet, ICellStyle headerStyle)
+    private static void CreateHeader(ISheet sheet, ICellStyle headerStyle)
     {
-        string[] titulos =
+        string[] titles =
         [
             "Id",
             "Código",
@@ -194,15 +194,15 @@ public sealed class EstoqueExportService(IEstoqueDataSource dataSource) : IEstoq
 
         var row = sheet.CreateRow(0);
 
-        for (var index = 0; index < titulos.Length; index++)
+        for (var index = 0; index < titles.Length; index++)
         {
             var cell = row.CreateCell(index);
-            cell.SetCellValue(titulos[index]);
+            cell.SetCellValue(titles[index]);
             cell.CellStyle = headerStyle;
         }
     }
 
-    private static EstilosWorkbook CriarEstilos(IWorkbook workbook)
+    private static WorkbookStyles CreateStyles(IWorkbook workbook)
     {
         var headerFont = workbook.CreateFont();
         headerFont.IsBold = true;
@@ -221,10 +221,10 @@ public sealed class EstoqueExportService(IEstoqueDataSource dataSource) : IEstoq
         var dateTimeStyle = workbook.CreateCellStyle();
         dateTimeStyle.DataFormat = dataFormat.GetFormat("dd/MM/yyyy HH:mm:ss");
 
-        return new EstilosWorkbook(headerStyle, moneyStyle, dateTimeStyle);
+        return new WorkbookStyles(headerStyle, moneyStyle, dateTimeStyle);
     }
 
-    private static void ConfigurarColunas(ISheet sheet)
+    private static void ConfigureColumns(ISheet sheet)
     {
         sheet.SetColumnWidth(0, 14 * 256);
         sheet.SetColumnWidth(1, 18 * 256);
@@ -236,8 +236,8 @@ public sealed class EstoqueExportService(IEstoqueDataSource dataSource) : IEstoq
         sheet.SetColumnWidth(7, 24 * 256);
     }
 
-    private sealed record EstilosWorkbook(
-        ICellStyle Cabecalho,
-        ICellStyle Monetario,
-        ICellStyle DataHora);
+    private sealed record WorkbookStyles(
+        ICellStyle Header,
+        ICellStyle Currency,
+        ICellStyle DateTime);
 }

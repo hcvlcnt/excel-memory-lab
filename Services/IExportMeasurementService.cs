@@ -2,14 +2,9 @@ using OutOfMemoryWorkbook.Models;
 
 namespace OutOfMemoryWorkbook.Services;
 
-public interface IQueryMiniExcelBenchmarkService
+public interface IExportMeasurementService
 {
-    IReadOnlyCollection<QueryMiniExcelScenario> GetScenarios();
-
-    Task<QueryTranslationDiagnostic> DiagnoseTranslationAsync(
-        CancellationToken cancellationToken);
-
-    Task<QueryMiniExcelBenchmarkSummary> BenchmarkAsync(
+    Task<ExportBenchmarkSummary> BenchmarkAsync(
         string scenario,
         int quantity,
         int repetitions,
@@ -17,7 +12,7 @@ public interface IQueryMiniExcelBenchmarkService
         bool forceGc,
         CancellationToken cancellationToken);
 
-    Task<QueryMiniExcelBenchmarkResult> MeasureAsync(
+    Task<ExportMeasurementResult> MeasureAsync(
         string scenario,
         int quantity,
         bool warmUp,

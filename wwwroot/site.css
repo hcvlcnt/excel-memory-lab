@@ -334,6 +334,24 @@ main {
     white-space: nowrap;
 }
 
+.query-metrics-grid small {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.68rem;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.query-metrics-grid .query-metric-main {
+    border-color: rgba(198, 243, 106, 0.34);
+    background: rgba(198, 243, 106, 0.07);
+}
+
+.query-metrics-grid .query-metric-main strong {
+    color: var(--accent);
+}
+
 .sql-panel {
     margin-top: 14px;
     overflow: hidden;
@@ -399,7 +417,7 @@ main {
 
 .field-grid {
     display: grid;
-    grid-template-columns: 1.35fr 0.65fr;
+    grid-template-columns: 1.25fr 0.55fr 0.4fr;
     gap: 18px;
 }
 

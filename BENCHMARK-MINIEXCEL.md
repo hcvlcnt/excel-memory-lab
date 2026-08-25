@@ -21,7 +21,7 @@ agrupamentos no banco e mover somente a formatação de saída para depois da fr
 | `dbreader-processado` | SQL manual com valores brutos | Método C# por linha | `yield return` direto no MiniExcel |
 
 Os cinco cenários consultam os mesmos registros e produzem as mesmas oito colunas,
-incluindo `ValorEmEstoque`. O cálculo é feito no SQL nos cenários `streaming-sql-case`
+incluindo `InventoryValue`. O cálculo é feito no SQL nos cenários `streaming-sql-case`
 e `dbreader-direto`, e no cliente nos demais cenários.
 O banco SQLite é preenchido deterministicamente fora do trecho medido.
 
@@ -42,13 +42,13 @@ cenário herde heap, caches e fragmentação do cenário anterior.
 ## Executar a bateria
 
 ```powershell
-.\Scripts\medir-query-miniexcel.ps1 -Repeticoes 5
+.\Scripts\measure-query-miniexcel.ps1 -Repetitions 5
 ```
 
 Para um ensaio rápido:
 
 ```powershell
-.\Scripts\medir-query-miniexcel.ps1 -Quantidades 50000 -Repeticoes 1
+.\Scripts\measure-query-miniexcel.ps1 -Quantities 50000 -Repetitions 1
 ```
 
 O CSV é gravado em `Resultados`.
@@ -57,9 +57,14 @@ O CSV é gravado em `Resultados`.
 
 - `GET /api/benchmarks/query-miniexcel/cenarios`
 - `GET /api/benchmarks/query-miniexcel/diagnostico`
-- `POST /api/benchmarks/query-miniexcel/{cenario}?quantidade=100000&aquecer=true&forcarGc=true`
+- `POST /api/benchmarks/query-miniexcel/{cenario}?quantidade=100000&repeticoes=5&aquecer=true&forcarGc=true`
 
-O diagnóstico executa propositalmente um método `TraduzirStatus` dentro de `Where` e
+O endpoint interativo executa cinco medições válidas por padrão. Quando `aquecer=true`,
+uma execução completa adicional é descartada antes da série. A resposta apresenta a
+mediana, o mínimo e o máximo de cada métrica. O total alocado é a referência principal;
+o pico gerenciado continua disponível como estimativa amostrada a cada 10 ms.
+
+O diagnóstico executa propositalmente um método `TranslateStatus` dentro de `Where` e
 captura a falha de tradução. O cenário `streaming-sql-case` também devolve o SQL gerado,
 permitindo confirmar a presença do `CASE`.
 

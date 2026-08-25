@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="Laboratório para comparar memória em exportações Excel com NPOI, EF Core e MiniExcel.">
     <title>Excel Memory Lab</title>
-    <link rel="stylesheet" href="/site.css?v=4">
+    <link rel="stylesheet" href="/site.css?v=5">
 </head>
 <body>
     <div class="page-shell">
@@ -59,6 +59,11 @@
                         <label class="field">
                             <span>Quantidade de registros</span>
                             <input id="quantity" name="quantity" type="number" min="1" max="1048575" value="25000" required>
+                        </label>
+
+                        <label class="field">
+                            <span>Repetições válidas</span>
+                            <input id="repetitions" name="repetitions" type="number" min="1" max="10" value="5" required>
                         </label>
                     </div>
 
@@ -121,34 +126,34 @@
 
                 <div class="metrics-grid">
                     <article class="metric-card metric-card-main">
-                        <span class="metric-label">Pico de memória gerenciada</span>
-                        <strong id="managed-peak">0 MiB</strong>
-                        <div class="metric-track"><span id="managed-track"></span></div>
-                        <small>Delta entre o início e o maior valor observado.</small>
-                    </article>
-
-                    <article class="metric-card">
-                        <span class="metric-label">Working set</span>
-                        <strong id="working-set">0 MiB</strong>
-                        <small>Memória física associada ao processo.</small>
-                    </article>
-
-                    <article class="metric-card">
-                        <span class="metric-label">Memória privada</span>
-                        <strong id="private-memory">0 MiB</strong>
-                        <small>Memória exclusiva reservada pelo processo.</small>
-                    </article>
-
-                    <article class="metric-card">
-                        <span class="metric-label">Total alocado</span>
+                        <span class="metric-label">Total alocado · mediana</span>
                         <strong id="allocated-memory">0 MiB</strong>
-                        <small>Inclui objetos coletados durante a execução.</small>
+                        <div class="metric-track"><span id="allocated-track"></span></div>
+                        <small id="allocated-range">Faixa entre as execuções válidas.</small>
+                    </article>
+
+                    <article class="metric-card">
+                        <span class="metric-label">Pico gerenciado aproximado</span>
+                        <strong id="managed-peak">0 MiB</strong>
+                        <small id="managed-range">Amostrado a cada 10 ms.</small>
+                    </article>
+
+                    <article class="metric-card">
+                        <span class="metric-label">Working set aproximado</span>
+                        <strong id="working-set">0 MiB</strong>
+                        <small id="working-set-range">Faixa observada.</small>
+                    </article>
+
+                    <article class="metric-card">
+                        <span class="metric-label">Memória privada aproximada</span>
+                        <strong id="private-memory">0 MiB</strong>
+                        <small id="private-memory-range">Faixa observada.</small>
                     </article>
 
                     <article class="metric-card">
                         <span class="metric-label">Duração</span>
                         <strong id="duration">0 ms</strong>
-                        <small id="sample-count">0 amostras coletadas.</small>
+                        <small id="duration-range">Faixa entre as execuções válidas.</small>
                     </article>
                 </div>
 
@@ -162,8 +167,8 @@
                         <strong id="measurement-target">—</strong>
                     </div>
                     <div>
-                        <span>Coletas do GC</span>
-                        <strong id="gc-counts">G0 0 · G1 0 · G2 0</strong>
+                        <span>Série do benchmark</span>
+                        <strong id="benchmark-series">—</strong>
                     </div>
                 </div>
             </section>
@@ -183,7 +188,7 @@
                 </div>
 
                 <div id="history-content" class="history-content hidden">
-                    <div id="history-bars" class="history-bars" aria-label="Comparação visual do pico de memória"></div>
+                    <div id="history-bars" class="history-bars" aria-label="Comparação visual do total alocado"></div>
 
                     <div class="table-scroll">
                         <table>
@@ -191,8 +196,8 @@
                                 <tr>
                                     <th>Cenário</th>
                                     <th>Registros</th>
-                                    <th>Pico gerenciado</th>
-                                    <th>Working set</th>
+                                    <th>Total alocado</th>
+                                    <th>Pico aprox.</th>
                                     <th>Duração</th>
                                 </tr>
                             </thead>
@@ -245,6 +250,11 @@
                         <label class="field">
                             <span>Quantidade de registros</span>
                             <input id="query-quantity" name="query-quantity" type="number" min="1" max="1048575" value="50000" required>
+                        </label>
+
+                        <label class="field">
+                            <span>Repetições válidas</span>
+                            <input id="query-repetitions" name="query-repetitions" type="number" min="1" max="10" value="5" required>
                         </label>
                     </div>
 
@@ -300,25 +310,30 @@
                     </div>
 
                     <div class="query-metrics-grid">
-                        <article>
-                            <span>Pico gerenciado</span>
-                            <strong id="query-managed-peak">0 MiB</strong>
+                        <article class="query-metric-main">
+                            <span>Total alocado · mediana</span>
+                            <strong id="query-allocated">0 MiB</strong>
+                            <small id="query-allocated-range">Faixa observada</small>
                         </article>
                         <article>
-                            <span>Working set</span>
-                            <strong id="query-working-set">0 MiB</strong>
+                            <span>Pico gerenciado aprox.</span>
+                            <strong id="query-managed-peak">0 MiB</strong>
+                            <small id="query-managed-range">Faixa observada</small>
                         </article>
                         <article>
                             <span>Duração</span>
                             <strong id="query-duration">0 ms</strong>
+                            <small id="query-duration-range">Faixa observada</small>
                         </article>
                         <article>
-                            <span>Total alocado</span>
-                            <strong id="query-allocated">0 MiB</strong>
+                            <span>Working set aprox.</span>
+                            <strong id="query-working-set">0 MiB</strong>
+                            <small id="query-working-set-range">Faixa observada</small>
                         </article>
                         <article>
                             <span>Arquivo</span>
                             <strong id="query-file-size">0 MiB</strong>
+                            <small>Mediana das execuções</small>
                         </article>
                     </div>
 
@@ -332,9 +347,9 @@
                     <div class="scenario-guide-heading">
                         <div>
                             <span class="guide-kicker">Comparação desta sessão</span>
-                            <h3>Pico de memória por cenário</h3>
+                            <h3>Total alocado por cenário</h3>
                         </div>
-                        <p>Quanto menor a barra, menor foi o pico gerenciado observado.</p>
+                        <p>As barras usam a mediana do total alocado nas execuções válidas.</p>
                     </div>
                     <div id="query-empty-history" class="empty-state query-empty-state">
                         <span>SEM MEDIÇÕES</span>
@@ -354,6 +369,6 @@
         </footer>
     </div>
 
-    <script src="/app.js?v=4" defer></script>
+    <script src="/app.js?v=5" defer></script>
 </body>
 </html>

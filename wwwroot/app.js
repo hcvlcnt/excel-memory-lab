@@ -1,6 +1,7 @@
 const form = document.querySelector('#measurement-form');
 const scenarioInput = document.querySelector('#scenario');
 const quantityInput = document.querySelector('#quantity');
+const repetitionsInput = document.querySelector('#repetitions');
 const warmupInput = document.querySelector('#warmup');
 const forceGcInput = document.querySelector('#force-gc');
 const measureButton = document.querySelector('#measure-button');
@@ -16,6 +17,7 @@ const historyTable = document.querySelector('#history-table');
 const queryForm = document.querySelector('#query-measurement-form');
 const queryScenarioInput = document.querySelector('#query-scenario');
 const queryQuantityInput = document.querySelector('#query-quantity');
+const queryRepetitionsInput = document.querySelector('#query-repetitions');
 const queryWarmupInput = document.querySelector('#query-warmup');
 const queryForceGcInput = document.querySelector('#query-force-gc');
 const queryMeasureButton = document.querySelector('#query-measure-button');
@@ -72,11 +74,11 @@ async function loadScenarios() {
         scenarioInput.replaceChildren();
 
         scenarios.forEach((scenario) => {
-            scenarioMetadata.set(scenario.rota, scenario);
+            scenarioMetadata.set(scenario.route, scenario);
 
             const option = document.createElement('option');
-            option.value = scenario.rota;
-            option.textContent = scenarioLabels[scenario.rota] ?? scenario.rota;
+            option.value = scenario.route;
+            option.textContent = scenarioLabels[scenario.route] ?? scenario.route;
             scenarioInput.append(option);
         });
 
@@ -92,7 +94,7 @@ function updateScenarioDescription() {
     const metadata = scenarioMetadata.get(scenarioInput.value);
 
     if (metadata) {
-        scenarioDescription.textContent = metadata.objetivo;
+        scenarioDescription.textContent = metadata.objective;
     }
 
     updateScenarioCardSelection();
@@ -105,13 +107,13 @@ function renderScenarioGuide(scenarios) {
         const card = document.createElement('button');
         card.type = 'button';
         card.className = 'scenario-card';
-        card.dataset.scenario = scenario.rota;
+        card.dataset.scenario = scenario.route;
 
         const top = document.createElement('div');
         top.className = 'scenario-card-top';
 
         const title = document.createElement('h4');
-        title.textContent = scenarioLabels[scenario.rota] ?? scenario.rota;
+        title.textContent = scenarioLabels[scenario.route] ?? scenario.route;
 
         const number = document.createElement('span');
         number.className = 'scenario-card-number';
@@ -120,12 +122,12 @@ function renderScenarioGuide(scenarios) {
 
         const description = document.createElement('p');
         description.className = 'scenario-card-description';
-        description.textContent = scenario.objetivo;
+        description.textContent = scenario.objective;
 
         const flow = document.createElement('div');
         flow.className = 'scenario-flow';
 
-        [scenario.fonteDeDados, scenario.workbook, scenario.destino].forEach((step) => {
+        [scenario.dataSource, scenario.workbook, scenario.target].forEach((step) => {
             const item = document.createElement('span');
             item.textContent = step;
             flow.append(item);
@@ -133,7 +135,7 @@ function renderScenarioGuide(scenarios) {
 
         card.append(top, description, flow);
         card.addEventListener('click', () => {
-            scenarioInput.value = scenario.rota;
+            scenarioInput.value = scenario.route;
             updateScenarioDescription();
             scenarioInput.focus();
         });
@@ -161,14 +163,19 @@ async function executeMeasurement(event) {
 
     const scenario = scenarioInput.value;
     const quantity = Number(quantityInput.value);
+    const repetitions = Number(repetitionsInput.value);
     const query = new URLSearchParams({
         quantidade: String(quantity),
+        repeticoes: String(repetitions),
         aquecer: String(warmupInput.checked),
         forcarGc: String(forceGcInput.checked)
     });
 
     setLoading(true);
-    setStatus(`Executando ${scenarioLabels[scenario] ?? scenario} com ${integerFormatter.format(quantity)} registros...`);
+    setStatus(
+        `Executando ${scenarioLabels[scenario] ?? scenario}: ${repetitions} medições válidas` +
+        `${warmupInput.checked ? ' + 1 aquecimento' : ''}...`
+    );
 
     try {
         const response = await fetch(`/api/medicoes/estoque/${encodeURIComponent(scenario)}?${query}`, {
@@ -183,7 +190,10 @@ async function executeMeasurement(event) {
         const result = await response.json();
         renderResult(result);
         addToHistory(result);
-        setStatus(`Medição concluída em ${formatMilliseconds(result.duracaoMs)}.`);
+        setStatus(
+            `Benchmark concluído: mediana de ${result.repetitions} execuções em ` +
+            `${formatMilliseconds(result.statistics.durationMs.median)}.`
+        );
         resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (error) {
         setStatus(error.message || 'A medição falhou.', true);
@@ -200,7 +210,7 @@ async function readError(response) {
             return Object.values(problem.errors).flat().join(' ');
         }
 
-        return problem.mensagem || problem.detail || problem.title || `Erro HTTP ${response.status}.`;
+        return problem.message || problem.detail || problem.title || `Erro HTTP ${response.status}.`;
     } catch {
         return `Erro HTTP ${response.status}.`;
     }
@@ -222,11 +232,11 @@ async function loadQueryScenarios() {
         queryScenarioInput.replaceChildren();
 
         scenarios.forEach((scenario) => {
-            queryScenarioMetadata.set(scenario.nome, scenario);
+            queryScenarioMetadata.set(scenario.name, scenario);
 
             const option = document.createElement('option');
-            option.value = scenario.nome;
-            option.textContent = queryScenarioLabels[scenario.nome] ?? scenario.nome;
+            option.value = scenario.name;
+            option.textContent = queryScenarioLabels[scenario.name] ?? scenario.name;
             queryScenarioInput.append(option);
         });
 
@@ -249,14 +259,14 @@ async function loadTranslationDiagnostic() {
         const diagnostic = await response.json();
         translationBadge.classList.remove('loading');
 
-        if (diagnostic.traduzivel) {
+        if (diagnostic.translatable) {
             translationBadge.textContent = 'traduzível';
-            translationMessage.textContent = diagnostic.mensagem;
+            translationMessage.textContent = diagnostic.message;
         } else {
             translationBadge.textContent = 'falha esperada';
             translationBadge.classList.add('expected');
-            translationMessage.textContent = diagnostic.solucaoRecomendada;
-            translationMessage.title = diagnostic.mensagem;
+            translationMessage.textContent = diagnostic.recommendedSolution;
+            translationMessage.title = diagnostic.message;
         }
     } catch (error) {
         translationBadge.classList.remove('loading');
@@ -272,13 +282,13 @@ function renderQueryScenarioGuide(scenarios) {
         const card = document.createElement('button');
         card.type = 'button';
         card.className = 'scenario-card';
-        card.dataset.queryScenario = scenario.nome;
+        card.dataset.queryScenario = scenario.name;
 
         const top = document.createElement('div');
         top.className = 'scenario-card-top';
 
         const title = document.createElement('h4');
-        title.textContent = queryScenarioLabels[scenario.nome] ?? scenario.nome;
+        title.textContent = queryScenarioLabels[scenario.name] ?? scenario.name;
 
         const number = document.createElement('span');
         number.className = 'scenario-card-number';
@@ -287,12 +297,12 @@ function renderQueryScenarioGuide(scenarios) {
 
         const description = document.createElement('p');
         description.className = 'scenario-card-description';
-        description.textContent = scenario.objetivo;
+        description.textContent = scenario.objective;
 
         const flow = document.createElement('div');
         flow.className = 'scenario-flow';
 
-        [scenario.consulta, scenario.conversaoEnum, scenario.materializacao].forEach((step) => {
+        [scenario.query, scenario.enumConversion, scenario.materialization].forEach((step) => {
             const item = document.createElement('span');
             item.textContent = step;
             flow.append(item);
@@ -300,7 +310,7 @@ function renderQueryScenarioGuide(scenarios) {
 
         card.append(top, description, flow);
         card.addEventListener('click', () => {
-            queryScenarioInput.value = scenario.nome;
+            queryScenarioInput.value = scenario.name;
             updateQueryScenarioDescription();
             queryScenarioInput.focus();
         });
@@ -314,7 +324,7 @@ function updateQueryScenarioDescription() {
     const metadata = queryScenarioMetadata.get(queryScenarioInput.value);
 
     if (metadata) {
-        queryScenarioDescription.textContent = metadata.objetivo;
+        queryScenarioDescription.textContent = metadata.objective;
     }
 
     updateQueryScenarioSelection();
@@ -337,8 +347,10 @@ async function executeQueryMeasurement(event) {
 
     const scenario = queryScenarioInput.value;
     const quantity = Number(queryQuantityInput.value);
+    const repetitions = Number(queryRepetitionsInput.value);
     const query = new URLSearchParams({
         quantidade: String(quantity),
+        repeticoes: String(repetitions),
         aquecer: String(queryWarmupInput.checked),
         forcarGc: String(queryForceGcInput.checked)
     });
@@ -346,13 +358,16 @@ async function executeQueryMeasurement(event) {
     const executionLabel = queryScenarioLabels[scenario] ?? scenario;
     const startedAt = performance.now();
     setQueryLoading(true);
-    setQueryStatus(`Executando ${executionLabel} com ${integerFormatter.format(quantity)} registros…`);
+    setQueryStatus(
+        `Executando ${executionLabel}: ${repetitions} medições válidas` +
+        `${queryWarmupInput.checked ? ' + 1 aquecimento' : ''}…`
+    );
 
     const progressTimer = window.setInterval(() => {
         const elapsedSeconds = Math.floor((performance.now() - startedAt) / 1000);
         setQueryStatus(
-            `Executando ${executionLabel} com ${integerFormatter.format(quantity)} registros… ${elapsedSeconds}s. ` +
-            'Na primeira execução, o banco pode ser preparado antes da medição.'
+            `Executando ${executionLabel}: ${repetitions} medições válidas… ${elapsedSeconds}s. ` +
+            'O resultado final usará a mediana e mostrará a faixa observada.'
         );
     }, 1000);
 
@@ -369,7 +384,10 @@ async function executeQueryMeasurement(event) {
         const result = await response.json();
         renderQueryResult(result);
         addToQueryHistory(result);
-        setQueryStatus(`Medição concluída em ${formatMilliseconds(result.duracaoMs)}.`);
+        setQueryStatus(
+            `Benchmark concluído: mediana de ${result.repetitions} execuções em ` +
+            `${formatMilliseconds(result.statistics.durationMs.median)}.`
+        );
         queryResults.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (error) {
         setQueryStatus(error.message || 'A medição da consulta falhou.', true);
@@ -380,25 +398,49 @@ async function executeQueryMeasurement(event) {
 }
 
 function renderQueryResult(result) {
+    const statistics = result.statistics;
+
     queryResults.classList.remove('hidden');
     document.querySelector('#query-result-title').textContent =
-        `${queryScenarioLabels[result.cenario] ?? result.cenario} · ${integerFormatter.format(result.quantidade)} linhas`;
-    document.querySelector('#query-managed-peak').textContent = formatMiB(result.deltaPicoMemoriaGerenciadaMiB);
-    document.querySelector('#query-working-set').textContent = formatMiB(result.deltaPicoWorkingSetMiB);
-    document.querySelector('#query-duration').textContent = formatMilliseconds(result.duracaoMs);
-    document.querySelector('#query-allocated').textContent = formatMiB(result.alocadoDuranteMedicaoMiB);
-    document.querySelector('#query-file-size').textContent = formatMiB(result.tamanhoArquivoMiB);
-    document.querySelector('#query-sql').textContent = result.sqlGerado;
+        `${queryScenarioLabels[result.scenario] ?? result.scenario} · ${integerFormatter.format(result.quantity)} linhas`;
+    document.querySelector('#query-allocated').textContent = formatMiB(statistics.allocatedMemoryMiB.median);
+    document.querySelector('#query-allocated-range').textContent = formatMetricRange(
+        statistics.allocatedMemoryMiB,
+        formatMiB
+    );
+    document.querySelector('#query-managed-peak').textContent = formatMiB(statistics.sampledManagedPeakMiB.median);
+    document.querySelector('#query-managed-range').textContent = formatMetricRange(
+        statistics.sampledManagedPeakMiB,
+        formatMiB
+    );
+    document.querySelector('#query-working-set').textContent = formatMiB(statistics.sampledWorkingSetPeakMiB.median);
+    document.querySelector('#query-working-set-range').textContent = formatMetricRange(
+        statistics.sampledWorkingSetPeakMiB,
+        formatMiB
+    );
+    document.querySelector('#query-duration').textContent = formatMilliseconds(statistics.durationMs.median);
+    document.querySelector('#query-duration-range').textContent = formatMetricRange(
+        statistics.durationMs,
+        formatMilliseconds
+    );
+    document.querySelector('#query-file-size').textContent = formatMiB(statistics.fileSizeMiB.median);
+    document.querySelector('#query-sql').textContent = result.generatedSql;
 
     const flags = document.querySelector('#query-result-flags');
     flags.replaceChildren();
-    appendResultFlag(flags, result.bufferizaResultados ? 'bufferiza tudo' : 'streaming', !result.bufferizaResultados);
+    appendResultFlag(flags, result.buffersResults ? 'bufferiza tudo' : 'streaming', !result.buffersResults);
     appendResultFlag(
         flags,
-        result.conversaoEnumNoCliente ? 'enum no cliente' : 'enum no SQL',
-        !result.conversaoEnumNoCliente
+        result.clientSideEnumConversion ? 'enum no cliente' : 'enum no SQL',
+        !result.clientSideEnumConversion
     );
-    appendResultFlag(flags, `${result.quantidadeAmostras} amostras`, false);
+    appendResultFlag(flags, `${result.repetitions} medições válidas`, true);
+    appendResultFlag(
+        flags,
+        result.warmUpRunDiscarded ? 'aquecimento descartado' : 'sem aquecimento',
+        result.warmUpRunDiscarded
+    );
+    appendResultFlag(flags, `pico amostrado a cada ${result.samplingIntervalMs} ms`, false);
 }
 
 function appendResultFlag(container, text, isPositive) {
@@ -429,7 +471,7 @@ function renderQueryHistory() {
     queryEmptyHistory.classList.add('hidden');
     queryHistoryContent.classList.remove('hidden');
     const maxValue = Math.max(
-        ...queryHistory.map((item) => item.deltaPicoMemoriaGerenciadaMiB),
+        ...queryHistory.map((item) => item.statistics.allocatedMemoryMiB.median),
         1
     );
     queryHistoryBars.replaceChildren();
@@ -440,17 +482,18 @@ function renderQueryHistory() {
 
         const label = document.createElement('span');
         label.className = 'history-bar-label';
-        label.textContent = `${queryScenarioLabels[item.cenario] ?? item.cenario} · ${integerFormatter.format(item.quantidade)}`;
+        label.textContent = `${queryScenarioLabels[item.scenario] ?? item.scenario} · ${integerFormatter.format(item.quantity)}`;
 
         const track = document.createElement('div');
         track.className = 'history-bar-track';
         const fill = document.createElement('span');
-        fill.style.width = `${Math.max(3, item.deltaPicoMemoriaGerenciadaMiB / maxValue * 100)}%`;
+        const allocatedMemory = item.statistics.allocatedMemoryMiB;
+        fill.style.width = `${Math.max(3, allocatedMemory.median / maxValue * 100)}%`;
         track.append(fill);
 
         const value = document.createElement('span');
         value.className = 'history-bar-value';
-        value.textContent = formatMiB(item.deltaPicoMemoriaGerenciadaMiB);
+        value.textContent = formatMiB(allocatedMemory.median);
         row.append(label, track, value);
         queryHistoryBars.append(row);
     });
@@ -459,11 +502,14 @@ function renderQueryHistory() {
 function saveQueryHistory() {
     try {
         const summaries = queryHistory.map((item) => ({
-            cenario: item.cenario,
-            quantidade: item.quantidade,
-            deltaPicoMemoriaGerenciadaMiB: item.deltaPicoMemoriaGerenciadaMiB
+            scenario: item.scenario,
+            quantity: item.quantity,
+            repetitions: item.repetitions,
+            statistics: {
+                allocatedMemoryMiB: item.statistics.allocatedMemoryMiB
+            }
         }));
-        sessionStorage.setItem('query-miniexcel-history', JSON.stringify(summaries));
+        sessionStorage.setItem('query-miniexcel-history-v3', JSON.stringify(summaries));
     } catch {
         // O histórico continua funcionando em memória quando o storage não está disponível.
     }
@@ -471,7 +517,7 @@ function saveQueryHistory() {
 
 function restoreQueryHistory() {
     try {
-        const saved = JSON.parse(sessionStorage.getItem('query-miniexcel-history') ?? '[]');
+        const saved = JSON.parse(sessionStorage.getItem('query-miniexcel-history-v3') ?? '[]');
 
         if (Array.isArray(saved)) {
             queryHistory.push(...saved.slice(0, 10));
@@ -496,20 +542,42 @@ function setQueryStatus(message, isError = false) {
 }
 
 function renderResult(result) {
-    resultsSection.classList.remove('hidden');
-    document.querySelector('#result-scenario').textContent = scenarioLabels[result.cenario] ?? result.cenario;
-    document.querySelector('#managed-peak').textContent = formatMiB(result.deltaPicoMemoriaGerenciadaMiB);
-    document.querySelector('#working-set').textContent = formatMiB(result.deltaPicoWorkingSetMiB);
-    document.querySelector('#private-memory').textContent = formatMiB(result.deltaPicoMemoriaPrivadaMiB);
-    document.querySelector('#allocated-memory').textContent = formatMiB(result.alocadoDuranteMedicaoMiB);
-    document.querySelector('#duration').textContent = formatMilliseconds(result.duracaoMs);
-    document.querySelector('#sample-count').textContent = `${integerFormatter.format(result.quantidadeAmostras)} amostras a cada ${result.intervaloAmostragemMs} ms.`;
-    document.querySelector('#file-size').textContent = formatMiB(result.tamanhoArquivoMiB);
-    document.querySelector('#measurement-target').textContent = result.destinoMedicao;
-    document.querySelector('#gc-counts').textContent = `G0 ${result.coletasGeracao0} · G1 ${result.coletasGeracao1} · G2 ${result.coletasGeracao2}`;
+    const statistics = result.statistics;
 
-    const trackWidth = Math.min(100, Math.max(8, result.deltaPicoMemoriaGerenciadaMiB / 2.5));
-    document.querySelector('#managed-track').style.width = `${trackWidth}%`;
+    resultsSection.classList.remove('hidden');
+    document.querySelector('#result-scenario').textContent = scenarioLabels[result.scenario] ?? result.scenario;
+    document.querySelector('#allocated-memory').textContent = formatMiB(statistics.allocatedMemoryMiB.median);
+    document.querySelector('#allocated-range').textContent = formatMetricRange(
+        statistics.allocatedMemoryMiB,
+        formatMiB
+    );
+    document.querySelector('#managed-peak').textContent = formatMiB(statistics.sampledManagedPeakMiB.median);
+    document.querySelector('#managed-range').textContent =
+        `${formatMetricRange(statistics.sampledManagedPeakMiB, formatMiB)} · amostragem de ${result.samplingIntervalMs} ms`;
+    document.querySelector('#working-set').textContent = formatMiB(statistics.sampledWorkingSetPeakMiB.median);
+    document.querySelector('#working-set-range').textContent = formatMetricRange(
+        statistics.sampledWorkingSetPeakMiB,
+        formatMiB
+    );
+    document.querySelector('#private-memory').textContent = formatMiB(statistics.sampledPrivateMemoryPeakMiB.median);
+    document.querySelector('#private-memory-range').textContent = formatMetricRange(
+        statistics.sampledPrivateMemoryPeakMiB,
+        formatMiB
+    );
+    document.querySelector('#duration').textContent = formatMilliseconds(statistics.durationMs.median);
+    document.querySelector('#duration-range').textContent = formatMetricRange(
+        statistics.durationMs,
+        formatMilliseconds
+    );
+    document.querySelector('#file-size').textContent = formatMiB(statistics.fileSizeMiB.median);
+    document.querySelector('#measurement-target').textContent = result.measurementTarget;
+    document.querySelector('#benchmark-series').textContent =
+        `${result.repetitions} válidas${result.warmUpRunDiscarded ? ' + 1 aquecimento' : ''}`;
+
+    const stability = statistics.allocatedMemoryMiB.maximum > 0
+        ? statistics.allocatedMemoryMiB.minimum / statistics.allocatedMemoryMiB.maximum * 100
+        : 100;
+    document.querySelector('#allocated-track').style.width = `${Math.max(8, stability)}%`;
 }
 
 function addToHistory(result) {
@@ -526,7 +594,10 @@ function addToHistory(result) {
 }
 
 function renderHistoryBars() {
-    const maxValue = Math.max(...history.map((item) => item.deltaPicoMemoriaGerenciadaMiB), 1);
+    const maxValue = Math.max(
+        ...history.map((item) => item.statistics.allocatedMemoryMiB.median),
+        1
+    );
     historyBars.replaceChildren();
 
     history.forEach((item) => {
@@ -535,17 +606,18 @@ function renderHistoryBars() {
 
         const label = document.createElement('span');
         label.className = 'history-bar-label';
-        label.textContent = scenarioLabels[item.cenario] ?? item.cenario;
+        label.textContent = scenarioLabels[item.scenario] ?? item.scenario;
 
         const track = document.createElement('div');
         track.className = 'history-bar-track';
         const fill = document.createElement('span');
-        fill.style.width = `${Math.max(3, item.deltaPicoMemoriaGerenciadaMiB / maxValue * 100)}%`;
+        const allocatedMemory = item.statistics.allocatedMemoryMiB;
+        fill.style.width = `${Math.max(3, allocatedMemory.median / maxValue * 100)}%`;
         track.append(fill);
 
         const value = document.createElement('span');
         value.className = 'history-bar-value';
-        value.textContent = formatMiB(item.deltaPicoMemoriaGerenciadaMiB);
+        value.textContent = formatMiB(allocatedMemory.median);
 
         row.append(label, track, value);
         historyBars.append(row);
@@ -558,11 +630,11 @@ function renderHistoryTable() {
     history.forEach((item) => {
         const row = document.createElement('tr');
         const values = [
-            scenarioLabels[item.cenario] ?? item.cenario,
-            integerFormatter.format(item.quantidade),
-            formatMiB(item.deltaPicoMemoriaGerenciadaMiB),
-            formatMiB(item.deltaPicoWorkingSetMiB),
-            formatMilliseconds(item.duracaoMs)
+            scenarioLabels[item.scenario] ?? item.scenario,
+            integerFormatter.format(item.quantity),
+            formatMiB(item.statistics.allocatedMemoryMiB.median),
+            formatMiB(item.statistics.sampledManagedPeakMiB.median),
+            formatMilliseconds(item.statistics.durationMs.median)
         ];
 
         values.forEach((value) => {
@@ -593,6 +665,10 @@ function formatMiB(value) {
 
 function formatMilliseconds(value) {
     return `${numberFormatter.format(value)} ms`;
+}
+
+function formatMetricRange(metric, formatter) {
+    return `mín. ${formatter(metric.minimum)} · máx. ${formatter(metric.maximum)}`;
 }
 
 form.addEventListener('submit', executeMeasurement);

@@ -1,28 +1,30 @@
 using System.Text.Json;
+using OutOfMemoryWorkbook.Models;
 
 namespace OutOfMemoryWorkbook.Services;
 
-public static class QueryMiniExcelBenchmarkCommand
+public static class ExportBenchmarkCommand
 {
     private const int MaximumRecords = 1_048_575;
 
     public static bool WasRequested(string[] args)
     {
         return args.Length > 0 &&
-               string.Equals(args[0], "query-benchmark", StringComparison.OrdinalIgnoreCase);
+               string.Equals(args[0], "benchmark", StringComparison.OrdinalIgnoreCase);
     }
 
     public static async Task<int> ExecuteAsync(
         string[] args,
-        string contentRoot,
         CancellationToken cancellationToken = default)
     {
         try
         {
             var options = ParseOptions(args);
-            var databasePath = Path.Combine(contentRoot, "work", "query-benchmark.db");
-            var service = new QueryMiniExcelBenchmarkService(databasePath);
-            var result = await service.MeasureAsync(
+            var dataSource = new InventoryDataSource();
+            var exportService = new InventoryExportService(dataSource);
+            var measurementService = new ExportMeasurementService(exportService);
+
+            var result = await measurementService.MeasureAsync(
                 options.Scenario,
                 options.Quantity,
                 options.WarmUp,
@@ -39,12 +41,12 @@ public static class QueryMiniExcelBenchmarkCommand
         }
         catch (Exception exception)
         {
-            await Console.Error.WriteLineAsync(exception.ToString());
+            await Console.Error.WriteLineAsync(exception.Message);
             return 1;
         }
     }
 
-    private static Options ParseOptions(string[] args)
+    private static BenchmarkOptions ParseOptions(string[] args)
     {
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -53,42 +55,40 @@ public static class QueryMiniExcelBenchmarkCommand
             if (index + 1 >= args.Length || !args[index].StartsWith("--"))
             {
                 throw new ArgumentException(
-                    "Uso: query-benchmark --cenario <nome> --quantidade <n> " +
-                    "--aquecer <true|false> --forcar-gc <true|false>.");
+                    "Uso: benchmark --cenario <nome> --quantidade <n> --aquecer <true|false> --forcar-gc <true|false>.");
             }
 
             values[args[index][2..]] = args[index + 1];
         }
 
-        var scenario = GetValue(
-            values,
-            "cenario",
-            Models.QueryMiniExcelScenarios.ClientStreaming);
+        var scenario = GetValue(values, "cenario", ExportScenarios.Current);
 
-        if (!Models.QueryMiniExcelScenarios.All.Contains(scenario))
+        if (!ExportScenarios.All.Contains(scenario))
         {
             throw new ArgumentException(
-                $"Cenário desconhecido. Valores aceitos: " +
-                $"{string.Join(", ", Models.QueryMiniExcelScenarios.All)}.");
+                $"Cenário desconhecido. Valores aceitos: {string.Join(", ", ExportScenarios.All)}.");
         }
 
         if (!int.TryParse(GetValue(values, "quantidade", "100000"), out var quantity) ||
             quantity is < 1 or > MaximumRecords)
         {
-            throw new ArgumentException($"Quantidade deve estar entre 1 e {MaximumRecords}.");
+            throw new ArgumentException(
+                $"Quantidade deve estar entre 1 e {MaximumRecords}.");
         }
 
-        return new Options(
-            scenario,
-            quantity,
-            ParseBoolean(values, "aquecer", true),
-            ParseBoolean(values, "forcar-gc", true));
+        var warmUp = ParseBoolean(values, "aquecer", defaultValue: true);
+        var forceGc = ParseBoolean(values, "forcar-gc", defaultValue: true);
+
+        return new BenchmarkOptions(scenario, quantity, warmUp, forceGc);
     }
 
     private static string GetValue(
         IReadOnlyDictionary<string, string> values,
         string key,
-        string defaultValue) => values.TryGetValue(key, out var value) ? value : defaultValue;
+        string defaultValue)
+    {
+        return values.TryGetValue(key, out var value) ? value : defaultValue;
+    }
 
     private static bool ParseBoolean(
         IReadOnlyDictionary<string, string> values,
@@ -100,10 +100,17 @@ public static class QueryMiniExcelBenchmarkCommand
             return defaultValue;
         }
 
-        return bool.TryParse(text, out var value)
-            ? value
-            : throw new ArgumentException($"O argumento --{key} deve ser true ou false.");
+        if (!bool.TryParse(text, out var value))
+        {
+            throw new ArgumentException($"O argumento --{key} deve ser true ou false.");
+        }
+
+        return value;
     }
 
-    private sealed record Options(string Scenario, int Quantity, bool WarmUp, bool ForceGc);
+    private sealed record BenchmarkOptions(
+        string Scenario,
+        int Quantity,
+        bool WarmUp,
+        bool ForceGc);
 }

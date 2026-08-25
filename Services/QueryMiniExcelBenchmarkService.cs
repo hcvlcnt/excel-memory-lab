@@ -11,72 +11,72 @@ namespace OutOfMemoryWorkbook.Services;
 public sealed class QueryMiniExcelBenchmarkService(string databasePath)
     : IQueryMiniExcelBenchmarkService
 {
-    private const int IntervaloAmostragemMs = 10;
-    private const int QuantidadeAquecimento = 100;
+    private const int SamplingIntervalMs = 10;
+    private const int WarmUpQuantity = 100;
     private readonly SemaphoreSlim _measurementLock = new(1, 1);
 
-    private static readonly CenarioQueryMiniExcel[] Cenarios =
+    private static readonly QueryMiniExcelScenario[] Scenarios =
     [
         new(
-            CenariosQueryMiniExcel.BufferizadoCliente,
+            QueryMiniExcelScenarios.BufferedClient,
             "EF Core executa a parte traduzível no SQLite e carrega tudo com ToList().",
             "A descrição do enum é calculada em C# depois da consulta.",
             "Lista completa na memória antes de o MiniExcel começar.",
             "Reproduzir o gargalo causado pela materialização antecipada."),
         new(
-            CenariosQueryMiniExcel.StreamingCliente,
+            QueryMiniExcelScenarios.ClientStreaming,
             "EF Core mantém filtros, ordenação e projeção simples no SQLite.",
             "AsEnumerable cria a fronteira; a descrição do enum é calculada em C# por linha.",
             "IEnumerable adiado é entregue diretamente ao MiniExcel, sem ToList().",
             "Resolver método não traduzível sem perder o streaming."),
         new(
-            CenariosQueryMiniExcel.StreamingSqlCase,
+            QueryMiniExcelScenarios.StreamingSqlCase,
             "EF Core projeta a descrição do status com CASE diretamente no SQLite.",
             "Descrição e valor do estoque são calculados por expressões traduzíveis no SQL.",
             "IEnumerable adiado é entregue diretamente ao MiniExcel.",
             "Comparar conversão no banco com conversão cliente em streaming."),
         new(
-            CenariosQueryMiniExcel.DbReaderDireto,
+            QueryMiniExcelScenarios.DirectDbReader,
             "DbDataReader forward-only executa SQL manual com CASE e multiplicação.",
             "Descrição e valor do estoque chegam prontos do SQLite.",
             "IDataReader é entregue diretamente ao MiniExcel, sem DTO ou coleção.",
             "Medir o menor pipeline possível entre banco e gerador de Excel."),
         new(
-            CenariosQueryMiniExcel.DbReaderProcessado,
+            QueryMiniExcelScenarios.ProcessedDbReader,
             "DbDataReader forward-only entrega apenas os valores brutos necessários.",
             "Um iterador traduz o enum e calcula o valor do estoque linha a linha em C#.",
             "yield return entrega uma única linha de cada vez ao MiniExcel.",
             "Medir processamento cliente flexível com memória auxiliar constante.")
     ];
 
-    public IReadOnlyCollection<CenarioQueryMiniExcel> ObterCenarios() => Cenarios;
+    public IReadOnlyCollection<QueryMiniExcelScenario> GetScenarios() => Scenarios;
 
-    public async Task<DiagnosticoTraducaoQuery> DiagnosticarTraducaoAsync(
+    public async Task<QueryTranslationDiagnostic> DiagnoseTranslationAsync(
         CancellationToken cancellationToken)
     {
-        await GarantirBancoAsync(1, cancellationToken);
-        await using var context = CriarContexto();
+        await EnsureDatabaseAsync(1, cancellationToken);
+        await using var context = CreateContext();
 
-        const string expressao =
-            "context.Estoques.Where(e => TraduzirStatus(e.Status).Contains(\"Disponível\"))";
+        const string expression =
+            "context.InventoryItems.Where(item => TranslateStatus(item.Status).Contains(\"Disponível\"))";
 
         try
         {
-            var sql = context.Estoques
-                .Where(item => TraduzirStatus(item.Status).Contains("Disponível"))
+            var sql = context.InventoryItems
+                .Where(item => TranslateStatus(item.Status).Contains("Disponível"))
                 .ToQueryString();
 
-            return new DiagnosticoTraducaoQuery(
+            return new QueryTranslationDiagnostic(
                 true,
-                expressao,
+                expression,
                 sql,
                 "Nenhuma correção foi necessária.");
         }
         catch (InvalidOperationException exception)
         {
-            return new DiagnosticoTraducaoQuery(
+            return new QueryTranslationDiagnostic(
                 false,
-                expressao,
+                expression,
                 exception.Message,
                 "Mantenha Where/OrderBy/GroupBy traduzíveis antes de AsEnumerable(). " +
                 "Converta o enum depois dessa fronteira ou use uma expressão condicional " +
@@ -84,66 +84,148 @@ public sealed class QueryMiniExcelBenchmarkService(string databasePath)
         }
     }
 
-    public async Task<ResultadoQueryMiniExcelBenchmark> MedirAsync(
-        string cenario,
-        int quantidade,
-        bool aquecer,
-        bool forcarGc,
+    public async Task<QueryMiniExcelBenchmarkSummary> BenchmarkAsync(
+        string scenario,
+        int quantity,
+        int repetitions,
+        bool discardWarmUpRun,
+        bool forceGc,
         CancellationToken cancellationToken)
     {
-        if (!CenariosQueryMiniExcel.Todos.Contains(cenario))
+        if (repetitions is < 1 or > 10)
         {
-            throw new ArgumentOutOfRangeException(nameof(cenario), cenario, "Cenário desconhecido.");
+            throw new ArgumentOutOfRangeException(
+                nameof(repetitions),
+                repetitions,
+                "A quantidade de repetições deve estar entre 1 e 10.");
         }
 
         await _measurementLock.WaitAsync(cancellationToken);
-        ArtefatoQuery? artefato = null;
 
         try
         {
-            await GarantirBancoAsync(quantidade, cancellationToken);
+            await EnsureDatabaseAsync(quantity, cancellationToken);
 
-            if (aquecer)
+            if (discardWarmUpRun)
             {
-                using var aquecimento = ExecutarCenario(
-                    cenario,
-                    Math.Min(quantidade, QuantidadeAquecimento),
+                await MeasureCoreAsync(
+                    scenario,
+                    quantity,
+                    prepareDatabase: false,
+                    warmUp: false,
+                    forceGc,
                     cancellationToken);
             }
 
-            if (forcarGc)
+            var runs = new List<QueryMiniExcelBenchmarkResult>(repetitions);
+
+            for (var repetition = 0; repetition < repetitions; repetition++)
             {
-                ForcarColetaCompleta();
+                runs.Add(await MeasureCoreAsync(
+                    scenario,
+                    quantity,
+                    prepareDatabase: false,
+                    warmUp: false,
+                    forceGc,
+                    cancellationToken));
             }
 
-            var snapshotInicial = SnapshotMemoria.Capturar();
-            var picos = new PicosMemoria(snapshotInicial);
-            var bytesAlocadosInicial = GC.GetTotalAllocatedBytes(precise: true);
-            var geracao0Inicial = GC.CollectionCount(0);
-            var geracao1Inicial = GC.CollectionCount(1);
-            var geracao2Inicial = GC.CollectionCount(2);
+            return QueryMiniExcelBenchmarkSummary.From(runs, discardWarmUpRun);
+        }
+        finally
+        {
+            _measurementLock.Release();
+        }
+    }
 
-            using var amostragemCancellation = new CancellationTokenSource();
-            var amostragemTask = AmostrarAsync(picos, amostragemCancellation.Token);
+    public async Task<QueryMiniExcelBenchmarkResult> MeasureAsync(
+        string scenario,
+        int quantity,
+        bool warmUp,
+        bool forceGc,
+        CancellationToken cancellationToken)
+    {
+        await _measurementLock.WaitAsync(cancellationToken);
+
+        try
+        {
+            return await MeasureCoreAsync(
+                scenario,
+                quantity,
+                prepareDatabase: true,
+                warmUp,
+                forceGc,
+                cancellationToken);
+        }
+        finally
+        {
+            _measurementLock.Release();
+        }
+    }
+
+    private async Task<QueryMiniExcelBenchmarkResult> MeasureCoreAsync(
+        string scenario,
+        int quantity,
+        bool prepareDatabase,
+        bool warmUp,
+        bool forceGc,
+        CancellationToken cancellationToken)
+    {
+        if (!QueryMiniExcelScenarios.All.Contains(scenario))
+        {
+            throw new ArgumentOutOfRangeException(nameof(scenario), scenario, "Cenário desconhecido.");
+        }
+
+        QueryArtifact? artifact = null;
+
+        try
+        {
+            if (prepareDatabase)
+            {
+                await EnsureDatabaseAsync(quantity, cancellationToken);
+            }
+
+            if (warmUp)
+            {
+                using var warmUpArtifact = ExecuteScenario(
+                    scenario,
+                    Math.Min(quantity, WarmUpQuantity),
+                    cancellationToken);
+            }
+
+            if (forceGc)
+            {
+                ForceFullCollection();
+            }
+
+            var initialSnapshot = MemorySnapshot.Capture();
+            var peaks = new MemoryPeaks(initialSnapshot);
+            var initialAllocatedBytes = GC.GetTotalAllocatedBytes(precise: true);
+            var initialGeneration0Count = GC.CollectionCount(0);
+            var initialGeneration1Count = GC.CollectionCount(1);
+            var initialGeneration2Count = GC.CollectionCount(2);
+
+            using var samplingCancellation = new CancellationTokenSource();
+            var samplingTask = SampleAsync(peaks, samplingCancellation.Token);
             var stopwatch = Stopwatch.StartNew();
 
             try
             {
-                artefato = await Task.Run(
-                    () => ExecutarCenario(cenario, quantidade, cancellationToken),
+                artifact = await Task.Run(
+                    () => ExecuteScenario(scenario, quantity, cancellationToken),
                     cancellationToken);
 
                 stopwatch.Stop();
-                picos.Registrar(SnapshotMemoria.Capturar());
+                peaks.Record(MemorySnapshot.Capture());
             }
             finally
             {
                 stopwatch.Stop();
-                amostragemCancellation.Cancel();
+                samplingCancellation.Cancel();
 
                 try
                 {
-                    await amostragemTask;
+                    await samplingTask;
                 }
                 catch (OperationCanceledException)
                 {
@@ -151,165 +233,164 @@ public sealed class QueryMiniExcelBenchmarkService(string databasePath)
                 }
             }
 
-            var descricao = Cenarios.Single(item =>
-                string.Equals(item.Nome, cenario, StringComparison.OrdinalIgnoreCase));
+            var description = Scenarios.Single(item =>
+                string.Equals(item.Name, scenario, StringComparison.OrdinalIgnoreCase));
 
-            return new ResultadoQueryMiniExcelBenchmark(
-                Cenario: cenario,
-                Quantidade: quantidade,
-                EstrategiaConsulta: descricao.Consulta,
-                BufferizaResultados: cenario.Equals(
-                    CenariosQueryMiniExcel.BufferizadoCliente,
+            return new QueryMiniExcelBenchmarkResult(
+                Scenario: scenario,
+                Quantity: quantity,
+                QueryStrategy: description.Query,
+                BuffersResults: scenario.Equals(
+                    QueryMiniExcelScenarios.BufferedClient,
                     StringComparison.OrdinalIgnoreCase),
-                ConversaoEnumNoCliente: cenario.Equals(
-                    CenariosQueryMiniExcel.BufferizadoCliente,
+                ClientSideEnumConversion: scenario.Equals(
+                    QueryMiniExcelScenarios.BufferedClient,
                     StringComparison.OrdinalIgnoreCase) ||
-                    cenario.Equals(
-                        CenariosQueryMiniExcel.StreamingCliente,
+                    scenario.Equals(
+                        QueryMiniExcelScenarios.ClientStreaming,
                         StringComparison.OrdinalIgnoreCase) ||
-                    cenario.Equals(
-                        CenariosQueryMiniExcel.DbReaderProcessado,
+                    scenario.Equals(
+                        QueryMiniExcelScenarios.ProcessedDbReader,
                         StringComparison.OrdinalIgnoreCase),
-                SqlGerado: artefato.Sql,
-                ArquivoTemporario: artefato.NomeArquivo,
-                IntervaloAmostragemMs: IntervaloAmostragemMs,
-                QuantidadeAmostras: picos.QuantidadeAmostras,
-                DuracaoMs: Math.Round(stopwatch.Elapsed.TotalMilliseconds, 2),
-                TamanhoArquivoBytes: artefato.TamanhoBytes,
-                DeltaPicoMemoriaGerenciadaBytes: CalcularDelta(
-                    picos.PicoMemoriaGerenciadaBytes,
-                    snapshotInicial.MemoriaGerenciadaBytes),
-                DeltaPicoWorkingSetBytes: CalcularDelta(
-                    picos.PicoWorkingSetBytes,
-                    snapshotInicial.WorkingSetBytes),
-                DeltaPicoMemoriaPrivadaBytes: CalcularDelta(
-                    picos.PicoMemoriaPrivadaBytes,
-                    snapshotInicial.MemoriaPrivadaBytes),
-                BytesAlocadosDuranteMedicao: Math.Max(
+                GeneratedSql: artifact.Sql,
+                TemporaryFile: artifact.FileName,
+                SamplingIntervalMs: SamplingIntervalMs,
+                SampleCount: peaks.SampleCount,
+                DurationMs: Math.Round(stopwatch.Elapsed.TotalMilliseconds, 2),
+                FileSizeBytes: artifact.SizeBytes,
+                PeakManagedMemoryDeltaBytes: CalculateDelta(
+                    peaks.PeakManagedMemoryBytes,
+                    initialSnapshot.ManagedMemoryBytes),
+                PeakWorkingSetDeltaBytes: CalculateDelta(
+                    peaks.PeakWorkingSetBytes,
+                    initialSnapshot.WorkingSetBytes),
+                PeakPrivateMemoryDeltaBytes: CalculateDelta(
+                    peaks.PeakPrivateMemoryBytes,
+                    initialSnapshot.PrivateMemoryBytes),
+                BytesAllocatedDuringMeasurement: Math.Max(
                     0,
-                    GC.GetTotalAllocatedBytes(precise: true) - bytesAlocadosInicial),
-                ColetasGeracao0: GC.CollectionCount(0) - geracao0Inicial,
-                ColetasGeracao1: GC.CollectionCount(1) - geracao1Inicial,
-                ColetasGeracao2: GC.CollectionCount(2) - geracao2Inicial);
+                    GC.GetTotalAllocatedBytes(precise: true) - initialAllocatedBytes),
+                Generation0Collections: GC.CollectionCount(0) - initialGeneration0Count,
+                Generation1Collections: GC.CollectionCount(1) - initialGeneration1Count,
+                Generation2Collections: GC.CollectionCount(2) - initialGeneration2Count);
         }
         finally
         {
-            artefato?.Dispose();
-            _measurementLock.Release();
+            artifact?.Dispose();
         }
     }
 
-    private ArtefatoQuery ExecutarCenario(
-        string cenario,
-        int quantidade,
+    private QueryArtifact ExecuteScenario(
+        string scenario,
+        int quantity,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        return cenario.ToLowerInvariant() switch
+        return scenario.ToLowerInvariant() switch
         {
-            CenariosQueryMiniExcel.BufferizadoCliente => ExecutarBufferizado(quantidade),
-            CenariosQueryMiniExcel.StreamingCliente => ExecutarStreamingCliente(quantidade),
-            CenariosQueryMiniExcel.StreamingSqlCase => ExecutarStreamingSqlCase(quantidade),
-            CenariosQueryMiniExcel.DbReaderDireto => ExecutarDbReaderDireto(
-                quantidade,
+            QueryMiniExcelScenarios.BufferedClient => ExecuteBuffered(quantity),
+            QueryMiniExcelScenarios.ClientStreaming => ExecuteClientStreaming(quantity),
+            QueryMiniExcelScenarios.StreamingSqlCase => ExecuteSqlCaseStreaming(quantity),
+            QueryMiniExcelScenarios.DirectDbReader => ExecuteDirectDbReader(
+                quantity,
                 cancellationToken),
-            CenariosQueryMiniExcel.DbReaderProcessado => ExecutarDbReaderProcessado(
-                quantidade,
+            QueryMiniExcelScenarios.ProcessedDbReader => ExecuteProcessedDbReader(
+                quantity,
                 cancellationToken),
             _ => throw new InvalidOperationException("Cenário não suportado.")
         };
     }
 
-    private ArtefatoQuery ExecutarBufferizado(int quantidade)
+    private QueryArtifact ExecuteBuffered(int quantity)
     {
-        using var context = CriarContexto();
-        var query = CriarConsultaBruta(context, quantidade);
+        using var context = CreateContext();
+        var query = CreateRawQuery(context, quantity);
         var sql = query.ToQueryString();
-        var itens = query.ToList();
-        var linhas = itens.Select(MapearNoCliente);
+        var items = query.ToList();
+        var rows = items.Select(MapOnClient);
 
-        return SalvarExcel(linhas, sql);
+        return SaveExcel(rows, sql);
     }
 
-    private ArtefatoQuery ExecutarStreamingCliente(int quantidade)
+    private QueryArtifact ExecuteClientStreaming(int quantity)
     {
-        using var context = CriarContexto();
-        var query = CriarConsultaBruta(context, quantidade);
+        using var context = CreateContext();
+        var query = CreateRawQuery(context, quantity);
         var sql = query.ToQueryString();
-        var linhas = MapearEmStreaming(query.AsEnumerable());
+        var rows = MapAsStream(query.AsEnumerable());
 
-        return SalvarExcel(linhas, sql);
+        return SaveExcel(rows, sql);
     }
 
-    private ArtefatoQuery ExecutarStreamingSqlCase(int quantidade)
+    private QueryArtifact ExecuteSqlCaseStreaming(int quantity)
     {
-        using var context = CriarContexto();
-        var query = context.Estoques
+        using var context = CreateContext();
+        var query = context.InventoryItems
             .AsNoTracking()
             .OrderBy(item => item.Id)
-            .Take(quantidade)
-            .Select(item => new EstoqueMiniExcelRow
+            .Take(quantity)
+            .Select(item => new InventoryMiniExcelRow
             {
                 Id = item.Id,
-                Codigo = item.Codigo,
-                Descricao = item.Descricao,
-                Status = item.Status == StatusEstoque.Disponivel
+                Code = item.Code,
+                Description = item.Description,
+                Status = item.Status == InventoryStatus.Available
                     ? "Disponível"
-                    : item.Status == StatusEstoque.Reservado
+                    : item.Status == InventoryStatus.Reserved
                         ? "Reservado"
-                        : item.Status == StatusEstoque.Bloqueado
+                        : item.Status == InventoryStatus.Blocked
                             ? "Bloqueado"
                             : "Sem saldo",
-                Quantidade = item.Quantidade,
-                CustoUnitario = item.CustoUnitario,
-                ValorEmEstoque = item.Quantidade * item.CustoUnitario,
-                UltimaMovimentacao = item.UltimaMovimentacao
+                Quantity = item.Quantity,
+                UnitCost = item.UnitCost,
+                InventoryValue = item.Quantity * item.UnitCost,
+                LastMovement = item.LastMovement
             });
 
         var sql = query.ToQueryString();
-        return SalvarExcel(query.AsEnumerable(), sql);
+        return SaveExcel(query.AsEnumerable(), sql);
     }
 
-    private ArtefatoQuery ExecutarDbReaderDireto(
-        int quantidade,
+    private QueryArtifact ExecuteDirectDbReader(
+        int quantity,
         CancellationToken cancellationToken)
     {
         using var connection = new SqliteConnection($"Data Source={databasePath}");
         connection.Open();
-        using var command = CriarComandoDbReader(
+        using var command = CreateDbReaderCommand(
             connection,
-            quantidade,
-            processarNoCliente: false);
+            quantity,
+            processOnClient: false);
         using var reader = command.ExecuteReader(CommandBehavior.SequentialAccess);
         cancellationToken.ThrowIfCancellationRequested();
 
-        return SalvarExcel(reader, FormatarSqlDbReader(command));
+        return SaveExcel(reader, FormatDbReaderSql(command));
     }
 
-    private ArtefatoQuery ExecutarDbReaderProcessado(
-        int quantidade,
+    private QueryArtifact ExecuteProcessedDbReader(
+        int quantity,
         CancellationToken cancellationToken)
     {
         using var connection = new SqliteConnection($"Data Source={databasePath}");
         connection.Open();
-        using var command = CriarComandoDbReader(
+        using var command = CreateDbReaderCommand(
             connection,
-            quantidade,
-            processarNoCliente: true);
+            quantity,
+            processOnClient: true);
         using var reader = command.ExecuteReader(CommandBehavior.SequentialAccess);
-        var linhas = MapearDbReaderEmStreaming(reader, cancellationToken);
+        var rows = MapDbReaderAsStream(reader, cancellationToken);
 
-        return SalvarExcel(linhas, FormatarSqlDbReader(command));
+        return SaveExcel(rows, FormatDbReaderSql(command));
     }
 
-    private static SqliteCommand CriarComandoDbReader(
+    private static SqliteCommand CreateDbReaderCommand(
         SqliteConnection connection,
-        int quantidade,
-        bool processarNoCliente)
+        int quantity,
+        bool processOnClient)
     {
         var command = connection.CreateCommand();
-        command.CommandText = processarNoCliente
+        command.CommandText = processOnClient
             ?
             """
             SELECT
@@ -345,117 +426,117 @@ public sealed class QueryMiniExcelBenchmarkService(string databasePath)
             LIMIT $quantidade
             """;
 
-        command.Parameters.AddWithValue("$quantidade", quantidade);
+        command.Parameters.AddWithValue("$quantidade", quantity);
         return command;
     }
 
-    private static string FormatarSqlDbReader(SqliteCommand command)
+    private static string FormatDbReaderSql(SqliteCommand command)
     {
-        var quantidade = command.Parameters["$quantidade"].Value;
-        return $"-- $quantidade = {quantidade}{Environment.NewLine}{command.CommandText}";
+        var quantity = command.Parameters["$quantidade"].Value;
+        return $"-- $quantidade = {quantity}{Environment.NewLine}{command.CommandText}";
     }
 
-    private static IQueryable<EstoqueQueryBruto> CriarConsultaBruta(
+    private static IQueryable<RawInventoryQuery> CreateRawQuery(
         QueryBenchmarkDbContext context,
-        int quantidade)
+        int quantity)
     {
-        return context.Estoques
+        return context.InventoryItems
             .AsNoTracking()
             .OrderBy(item => item.Id)
-            .Take(quantidade)
-            .Select(item => new EstoqueQueryBruto
+            .Take(quantity)
+            .Select(item => new RawInventoryQuery
             {
                 Id = item.Id,
-                Codigo = item.Codigo,
-                Descricao = item.Descricao,
+                Code = item.Code,
+                Description = item.Description,
                 Status = item.Status,
-                Quantidade = item.Quantidade,
-                CustoUnitario = item.CustoUnitario,
-                UltimaMovimentacao = item.UltimaMovimentacao
+                Quantity = item.Quantity,
+                UnitCost = item.UnitCost,
+                LastMovement = item.LastMovement
             });
     }
 
-    private static IEnumerable<EstoqueMiniExcelRow> MapearEmStreaming(
-        IEnumerable<EstoqueQueryBruto> itens)
+    private static IEnumerable<InventoryMiniExcelRow> MapAsStream(
+        IEnumerable<RawInventoryQuery> items)
     {
-        foreach (var item in itens)
+        foreach (var item in items)
         {
-            yield return MapearNoCliente(item);
+            yield return MapOnClient(item);
         }
     }
 
-    private static IEnumerable<EstoqueMiniExcelRow> MapearDbReaderEmStreaming(
+    private static IEnumerable<InventoryMiniExcelRow> MapDbReaderAsStream(
         SqliteDataReader reader,
         CancellationToken cancellationToken)
     {
         var idOrdinal = reader.GetOrdinal("Id");
-        var codigoOrdinal = reader.GetOrdinal("Codigo");
-        var descricaoOrdinal = reader.GetOrdinal("Descricao");
+        var codeOrdinal = reader.GetOrdinal("Codigo");
+        var descriptionOrdinal = reader.GetOrdinal("Descricao");
         var statusOrdinal = reader.GetOrdinal("Status");
-        var quantidadeOrdinal = reader.GetOrdinal("Quantidade");
-        var custoOrdinal = reader.GetOrdinal("CustoUnitario");
-        var movimentacaoOrdinal = reader.GetOrdinal("UltimaMovimentacao");
+        var quantityOrdinal = reader.GetOrdinal("Quantidade");
+        var costOrdinal = reader.GetOrdinal("CustoUnitario");
+        var lastMovementOrdinal = reader.GetOrdinal("UltimaMovimentacao");
 
         while (reader.Read())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var quantidade = reader.GetInt32(quantidadeOrdinal);
-            var custo = Convert.ToDecimal(
-                reader.GetValue(custoOrdinal),
+            var quantity = reader.GetInt32(quantityOrdinal);
+            var cost = Convert.ToDecimal(
+                reader.GetValue(costOrdinal),
                 CultureInfo.InvariantCulture);
 
-            yield return new EstoqueMiniExcelRow
+            yield return new InventoryMiniExcelRow
             {
                 Id = reader.GetInt64(idOrdinal),
-                Codigo = reader.GetString(codigoOrdinal),
-                Descricao = reader.GetString(descricaoOrdinal),
-                Status = TraduzirStatus((StatusEstoque)reader.GetInt32(statusOrdinal)),
-                Quantidade = quantidade,
-                CustoUnitario = custo,
-                ValorEmEstoque = quantidade * custo,
-                UltimaMovimentacao = reader.GetDateTime(movimentacaoOrdinal)
+                Code = reader.GetString(codeOrdinal),
+                Description = reader.GetString(descriptionOrdinal),
+                Status = TranslateStatus((InventoryStatus)reader.GetInt32(statusOrdinal)),
+                Quantity = quantity,
+                UnitCost = cost,
+                InventoryValue = quantity * cost,
+                LastMovement = reader.GetDateTime(lastMovementOrdinal)
             };
         }
     }
 
-    private static EstoqueMiniExcelRow MapearNoCliente(EstoqueQueryBruto item)
+    private static InventoryMiniExcelRow MapOnClient(RawInventoryQuery item)
     {
-        return new EstoqueMiniExcelRow
+        return new InventoryMiniExcelRow
         {
             Id = item.Id,
-            Codigo = item.Codigo,
-            Descricao = item.Descricao,
-            Status = TraduzirStatus(item.Status),
-            Quantidade = item.Quantidade,
-            CustoUnitario = item.CustoUnitario,
-            ValorEmEstoque = item.Quantidade * item.CustoUnitario,
-            UltimaMovimentacao = item.UltimaMovimentacao
+            Code = item.Code,
+            Description = item.Description,
+            Status = TranslateStatus(item.Status),
+            Quantity = item.Quantity,
+            UnitCost = item.UnitCost,
+            InventoryValue = item.Quantity * item.UnitCost,
+            LastMovement = item.LastMovement
         };
     }
 
-    private static string TraduzirStatus(StatusEstoque status)
+    private static string TranslateStatus(InventoryStatus status)
     {
         return status switch
         {
-            StatusEstoque.Disponivel => "Disponível",
-            StatusEstoque.Reservado => "Reservado",
-            StatusEstoque.Bloqueado => "Bloqueado",
-            StatusEstoque.SemSaldo => "Sem saldo",
+            InventoryStatus.Available => "Disponível",
+            InventoryStatus.Reserved => "Reservado",
+            InventoryStatus.Blocked => "Bloqueado",
+            InventoryStatus.OutOfStock => "Sem saldo",
             _ => "Desconhecido"
         };
     }
 
-    private static ArtefatoQuery SalvarExcel(object linhas, string sql)
+    private static QueryArtifact SaveExcel(object rows, string sql)
     {
-        var caminho = Path.Combine(
+        var path = Path.Combine(
             Path.GetTempPath(),
             $"query-miniexcel-{Guid.NewGuid():N}.xlsx");
 
-        MiniExcel.SaveAs(caminho, linhas, printHeader: true, sheetName: "Estoque");
-        return new ArtefatoQuery(caminho, sql);
+        MiniExcel.SaveAs(path, rows, printHeader: true, sheetName: "Estoque");
+        return new QueryArtifact(path, sql);
     }
 
-    private QueryBenchmarkDbContext CriarContexto()
+    private QueryBenchmarkDbContext CreateContext()
     {
         var options = new DbContextOptionsBuilder<QueryBenchmarkDbContext>()
             .UseSqlite($"Data Source={databasePath}")
@@ -464,16 +545,16 @@ public sealed class QueryMiniExcelBenchmarkService(string databasePath)
         return new QueryBenchmarkDbContext(options);
     }
 
-    private async Task GarantirBancoAsync(int quantidade, CancellationToken cancellationToken)
+    private async Task EnsureDatabaseAsync(int quantity, CancellationToken cancellationToken)
     {
-        var diretorio = Path.GetDirectoryName(databasePath);
+        var directory = Path.GetDirectoryName(databasePath);
 
-        if (!string.IsNullOrWhiteSpace(diretorio))
+        if (!string.IsNullOrWhiteSpace(directory))
         {
-            Directory.CreateDirectory(diretorio);
+            Directory.CreateDirectory(directory);
         }
 
-        await using (var context = CriarContexto())
+        await using (var context = CreateContext())
         {
             await context.Database.EnsureCreatedAsync(cancellationToken);
         }
@@ -483,9 +564,9 @@ public sealed class QueryMiniExcelBenchmarkService(string databasePath)
 
         await using var countCommand = connection.CreateCommand();
         countCommand.CommandText = "SELECT COALESCE(MAX(Id), 0) FROM Estoques";
-        var atual = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken));
+        var current = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken));
 
-        if (atual >= quantidade)
+        if (current >= quantity)
         {
             return;
         }
@@ -502,24 +583,24 @@ public sealed class QueryMiniExcelBenchmarkService(string databasePath)
             """;
 
         var idParameter = insert.Parameters.Add("$id", SqliteType.Integer);
-        var codigoParameter = insert.Parameters.Add("$codigo", SqliteType.Text);
-        var descricaoParameter = insert.Parameters.Add("$descricao", SqliteType.Text);
+        var codeParameter = insert.Parameters.Add("$codigo", SqliteType.Text);
+        var descriptionParameter = insert.Parameters.Add("$descricao", SqliteType.Text);
         var statusParameter = insert.Parameters.Add("$status", SqliteType.Integer);
-        var quantidadeParameter = insert.Parameters.Add("$quantidade", SqliteType.Integer);
-        var custoParameter = insert.Parameters.Add("$custo", SqliteType.Real);
-        var dataParameter = insert.Parameters.Add("$data", SqliteType.Text);
+        var quantityParameter = insert.Parameters.Add("$quantidade", SqliteType.Integer);
+        var costParameter = insert.Parameters.Add("$custo", SqliteType.Real);
+        var dateParameter = insert.Parameters.Add("$data", SqliteType.Text);
         insert.Prepare();
 
-        for (var id = atual + 1; id <= quantidade; id++)
+        for (var id = current + 1; id <= quantity; id++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             idParameter.Value = id;
-            codigoParameter.Value = $"SKU-{id:0000000}";
-            descricaoParameter.Value = $"Produto de benchmark {id:0000000}";
+            codeParameter.Value = $"SKU-{id:0000000}";
+            descriptionParameter.Value = $"Produto de benchmark {id:0000000}";
             statusParameter.Value = ((id - 1) % 4) + 1;
-            quantidadeParameter.Value = id % 500;
-            custoParameter.Value = Math.Round(1.25 + (id % 10_000) / 13.0, 2);
-            dataParameter.Value = new DateTime(2020, 1, 1)
+            quantityParameter.Value = id % 500;
+            costParameter.Value = Math.Round(1.25 + (id % 10_000) / 13.0, 2);
+            dateParameter.Value = new DateTime(2020, 1, 1)
                 .AddMinutes(id)
                 .ToString("O");
 
@@ -529,101 +610,101 @@ public sealed class QueryMiniExcelBenchmarkService(string databasePath)
         await transaction.CommitAsync(cancellationToken);
     }
 
-    private static async Task AmostrarAsync(PicosMemoria picos, CancellationToken cancellationToken)
+    private static async Task SampleAsync(MemoryPeaks peaks, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            picos.Registrar(SnapshotMemoria.Capturar());
-            await Task.Delay(IntervaloAmostragemMs, cancellationToken);
+            peaks.Record(MemorySnapshot.Capture());
+            await Task.Delay(SamplingIntervalMs, cancellationToken);
         }
     }
 
-    private static void ForcarColetaCompleta()
+    private static void ForceFullCollection()
     {
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
         GC.WaitForPendingFinalizers();
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
     }
 
-    private static long CalcularDelta(long pico, long inicial) => Math.Max(0, pico - inicial);
+    private static long CalculateDelta(long peak, long initial) => Math.Max(0, peak - initial);
 
-    private sealed record SnapshotMemoria(
-        long MemoriaGerenciadaBytes,
+    private sealed record MemorySnapshot(
+        long ManagedMemoryBytes,
         long WorkingSetBytes,
-        long MemoriaPrivadaBytes)
+        long PrivateMemoryBytes)
     {
-        public static SnapshotMemoria Capturar()
+        public static MemorySnapshot Capture()
         {
-            using var processo = Process.GetCurrentProcess();
-            return new SnapshotMemoria(
+            using var process = Process.GetCurrentProcess();
+            return new MemorySnapshot(
                 GC.GetTotalMemory(false),
-                processo.WorkingSet64,
-                processo.PrivateMemorySize64);
+                process.WorkingSet64,
+                process.PrivateMemorySize64);
         }
     }
 
-    private sealed class PicosMemoria(SnapshotMemoria inicial)
+    private sealed class MemoryPeaks(MemorySnapshot initial)
     {
-        private long _gerenciada = inicial.MemoriaGerenciadaBytes;
-        private long _workingSet = inicial.WorkingSetBytes;
-        private long _privada = inicial.MemoriaPrivadaBytes;
-        private int _amostras = 1;
+        private long _managedMemory = initial.ManagedMemoryBytes;
+        private long _workingSet = initial.WorkingSetBytes;
+        private long _privateMemory = initial.PrivateMemoryBytes;
+        private int _samples = 1;
 
-        public long PicoMemoriaGerenciadaBytes => Volatile.Read(ref _gerenciada);
-        public long PicoWorkingSetBytes => Volatile.Read(ref _workingSet);
-        public long PicoMemoriaPrivadaBytes => Volatile.Read(ref _privada);
-        public int QuantidadeAmostras => Volatile.Read(ref _amostras);
+        public long PeakManagedMemoryBytes => Volatile.Read(ref _managedMemory);
+        public long PeakWorkingSetBytes => Volatile.Read(ref _workingSet);
+        public long PeakPrivateMemoryBytes => Volatile.Read(ref _privateMemory);
+        public int SampleCount => Volatile.Read(ref _samples);
 
-        public void Registrar(SnapshotMemoria snapshot)
+        public void Record(MemorySnapshot snapshot)
         {
-            AtualizarMaximo(ref _gerenciada, snapshot.MemoriaGerenciadaBytes);
-            AtualizarMaximo(ref _workingSet, snapshot.WorkingSetBytes);
-            AtualizarMaximo(ref _privada, snapshot.MemoriaPrivadaBytes);
-            Interlocked.Increment(ref _amostras);
+            UpdateMaximum(ref _managedMemory, snapshot.ManagedMemoryBytes);
+            UpdateMaximum(ref _workingSet, snapshot.WorkingSetBytes);
+            UpdateMaximum(ref _privateMemory, snapshot.PrivateMemoryBytes);
+            Interlocked.Increment(ref _samples);
         }
 
-        private static void AtualizarMaximo(ref long destino, long candidato)
+        private static void UpdateMaximum(ref long target, long candidate)
         {
-            var atual = Volatile.Read(ref destino);
+            var current = Volatile.Read(ref target);
 
-            while (candidato > atual)
+            while (candidate > current)
             {
-                var anterior = Interlocked.CompareExchange(ref destino, candidato, atual);
+                var previous = Interlocked.CompareExchange(ref target, candidate, current);
 
-                if (anterior == atual)
+                if (previous == current)
                 {
                     return;
                 }
 
-                atual = anterior;
+                current = previous;
             }
         }
     }
 
-    private sealed class ArtefatoQuery : IDisposable
+    private sealed class QueryArtifact : IDisposable
     {
-        private string? _caminho;
+        private string? _path;
 
-        public ArtefatoQuery(string caminho, string sql)
+        public QueryArtifact(string path, string sql)
         {
-            _caminho = caminho;
+            _path = path;
             Sql = sql;
-            TamanhoBytes = new FileInfo(caminho).Length;
-            NomeArquivo = Path.GetFileName(caminho);
+            SizeBytes = new FileInfo(path).Length;
+            FileName = Path.GetFileName(path);
         }
 
         public string Sql { get; }
-        public long TamanhoBytes { get; }
-        public string NomeArquivo { get; }
+        public long SizeBytes { get; }
+        public string FileName { get; }
 
         public void Dispose()
         {
-            if (_caminho is not null && File.Exists(_caminho))
+            if (_path is not null && File.Exists(_path))
             {
-                File.Delete(_caminho);
+                File.Delete(_path);
             }
 
-            _caminho = null;
+            _path = null;
         }
     }
 }

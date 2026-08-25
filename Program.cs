@@ -1,16 +1,16 @@
 using OutOfMemoryWorkbook.Services;
 
-if (QueryMiniExcelBenchmarkCommand.FoiSolicitado(args))
+if (QueryMiniExcelBenchmarkCommand.WasRequested(args))
 {
-    Environment.ExitCode = await QueryMiniExcelBenchmarkCommand.ExecutarAsync(
+    Environment.ExitCode = await QueryMiniExcelBenchmarkCommand.ExecuteAsync(
         args,
         Directory.GetCurrentDirectory());
     return;
 }
 
-if (ExportacaoBenchmarkCommand.FoiSolicitado(args))
+if (ExportBenchmarkCommand.WasRequested(args))
 {
-    Environment.ExitCode = await ExportacaoBenchmarkCommand.ExecutarAsync(args);
+    Environment.ExitCode = await ExportBenchmarkCommand.ExecuteAsync(args);
     return;
 }
 
@@ -24,9 +24,9 @@ builder.Logging.AddConsole();
 builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
-builder.Services.AddSingleton<IEstoqueDataSource, EstoqueDataSource>();
-builder.Services.AddSingleton<IEstoqueExportService, EstoqueExportService>();
-builder.Services.AddSingleton<IMedicaoExportacaoService, MedicaoExportacaoService>();
+builder.Services.AddSingleton<IInventoryDataSource, InventoryDataSource>();
+builder.Services.AddSingleton<IInventoryExportService, InventoryExportService>();
+builder.Services.AddSingleton<IExportMeasurementService, ExportMeasurementService>();
 builder.Services.AddSingleton<IQueryMiniExcelBenchmarkService>(serviceProvider =>
 {
     var environment = serviceProvider.GetRequiredService<IWebHostEnvironment>();

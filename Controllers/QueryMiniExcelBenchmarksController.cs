@@ -9,51 +9,61 @@ namespace OutOfMemoryWorkbook.Controllers;
 public sealed class QueryMiniExcelBenchmarksController(
     IQueryMiniExcelBenchmarkService benchmarkService) : ControllerBase
 {
-    private const int MaximoDeRegistros = 1_048_575;
+    private const int MaximumRecords = 1_048_575;
 
     [HttpGet("cenarios")]
-    public ActionResult<IReadOnlyCollection<CenarioQueryMiniExcel>> ObterCenarios()
+    public ActionResult<IReadOnlyCollection<QueryMiniExcelScenario>> GetScenarios()
     {
-        return Ok(benchmarkService.ObterCenarios());
+        return Ok(benchmarkService.GetScenarios());
     }
 
     [HttpGet("diagnostico")]
-    public async Task<ActionResult<DiagnosticoTraducaoQuery>> DiagnosticarAsync(
+    public async Task<ActionResult<QueryTranslationDiagnostic>> DiagnoseAsync(
         CancellationToken cancellationToken)
     {
-        return Ok(await benchmarkService.DiagnosticarTraducaoAsync(cancellationToken));
+        return Ok(await benchmarkService.DiagnoseTranslationAsync(cancellationToken));
     }
 
     [HttpPost("{cenario}")]
-    public async Task<ActionResult<ResultadoQueryMiniExcelBenchmark>> MedirAsync(
-        string cenario,
-        [FromQuery] int quantidade = 100_000,
-        [FromQuery] bool aquecer = true,
-        [FromQuery] bool forcarGc = true,
+    public async Task<ActionResult<QueryMiniExcelBenchmarkSummary>> MeasureAsync(
+        [FromRoute(Name = "cenario")] string scenario,
+        [FromQuery(Name = "quantidade")] int quantity = 100_000,
+        [FromQuery(Name = "repeticoes")] int repetitions = 5,
+        [FromQuery(Name = "aquecer")] bool warmUp = true,
+        [FromQuery(Name = "forcarGc")] bool forceGc = true,
         CancellationToken cancellationToken = default)
     {
-        if (!CenariosQueryMiniExcel.Todos.Contains(cenario))
+        if (!QueryMiniExcelScenarios.All.Contains(scenario))
         {
             return BadRequest(new
             {
-                mensagem = "Cenário desconhecido.",
-                cenarios = CenariosQueryMiniExcel.Todos
+                message = "Cenário desconhecido.",
+                scenarios = QueryMiniExcelScenarios.All
             });
         }
 
-        if (quantidade is < 1 or > MaximoDeRegistros)
+        if (quantity is < 1 or > MaximumRecords)
         {
             return BadRequest(new
             {
-                mensagem = $"Quantidade deve estar entre 1 e {MaximoDeRegistros}."
+                message = $"Quantidade deve estar entre 1 e {MaximumRecords}."
             });
         }
 
-        return Ok(await benchmarkService.MedirAsync(
-            cenario,
-            quantidade,
-            aquecer,
-            forcarGc,
+        if (repetitions is < 1 or > 10)
+        {
+            return BadRequest(new
+            {
+                message = "A quantidade de repetições deve estar entre 1 e 10."
+            });
+        }
+
+        return Ok(await benchmarkService.BenchmarkAsync(
+            scenario,
+            quantity,
+            repetitions,
+            warmUp,
+            forceGc,
             cancellationToken));
     }
 }
